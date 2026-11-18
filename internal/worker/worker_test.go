@@ -14,6 +14,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hkln4/go-notification-service/internal/breaker"
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/provider"
@@ -342,4 +343,59 @@ func TestHandleRetryPublishFailureLeavesStateAlone(t *testing.T) {
 	require.True(t, ack.nacked)
 	require.True(t, ack.requeued)
 	require.Empty(t, h.store.outcomes, "no outcome recorded before the retry message is safe")
+}
+
+func TestHandleCircuitBreaker(t *testing.T) {
+	h := newHarness()
+	h.sender.res = provider.Result{StatusCode: 503}
+	b := breaker.New(breaker.Config{Threshold: 2, Cooldown: 80 * time.Millisecond})
+	w := New(h.store, h.pub, h.sender, h.lim, Config{
+		Lease: time.Minute, TokenWait: time.Second, RetryDelays: delays, MaxAttempts: 5, Breaker: b,
+	}, quietLog())
+	handle := func() *fakeAck {
+		ack := &fakeAck{}
+		w.Handle(context.Background(), amqp.Delivery{Acknowledger: ack, Body: body(t), Priority: 1})
+		return ack
+	}
+
+	handle()
+	handle()
+	require.Equal(t, breaker.Open, b.State("sms"))
+	require.Len(t, h.sender.calls, 2)
+
+	// Open: parked for the cooldown (shortest queue >= 80ms), no claim, no
+	// attempt, no provider call.
+	outcomes := len(h.store.outcomes)
+	ack := handle()
+	require.True(t, ack.acked)
+	require.Len(t, h.sender.calls, 2)
+	require.Len(t, h.store.outcomes, outcomes)
+	last := h.pub.sent()[len(h.pub.sent())-1]
+	require.Equal(t, broker.RetryRoutingKey("sms", delays[2]), last.RoutingKey)
+
+	// After the cooldown one trial goes through and closes the circuit.
+	time.Sleep(80 * time.Millisecond)
+	h.sender.res = provider.Result{StatusCode: 202}
+	handle()
+	require.Len(t, h.sender.calls, 3)
+	require.Equal(t, breaker.Closed, b.State("sms"))
+}
+
+// A half-open trial that never reaches the provider (here: the claim finds
+// the notification already sent) must not leave the breaker stuck.
+func TestHandleAbortedTrialFreesBreaker(t *testing.T) {
+	h := newHarness()
+	b := breaker.New(breaker.Config{Threshold: 1, Cooldown: time.Millisecond})
+	tk, _ := b.Allow("sms")
+	tk.Report(breaker.Failure)
+	time.Sleep(2 * time.Millisecond)
+
+	h.store.claimable, h.store.state = false, domain.StatusSent
+	w := New(h.store, h.pub, h.sender, h.lim, Config{
+		Lease: time.Minute, TokenWait: time.Second, RetryDelays: delays, MaxAttempts: 5, Breaker: b,
+	}, quietLog())
+	w.Handle(context.Background(), amqp.Delivery{Acknowledger: &fakeAck{}, Body: body(t)})
+
+	_, ok := b.Allow("sms")
+	require.True(t, ok, "the aborted trial must release the half-open slot")
 }

@@ -23,6 +23,7 @@ type Store interface {
 	ListNotifications(ctx context.Context, f domain.ListFilter) ([]domain.Notification, error)
 	FindByIdempotencyKeys(ctx context.Context, keys []string) (map[string]domain.Notification, error)
 	FindBatchByIdempotencyKey(ctx context.Context, key string) (domain.Batch, []uuid.UUID, error)
+	Requeue(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
 
 type Service struct {
@@ -151,4 +152,10 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (NotificationDetail, er
 
 func (s *Service) Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
 	return s.store.Cancel(ctx, id)
+}
+
+// Retry sends a failed (dead-lettered) notification again with a fresh set
+// of attempts.
+func (s *Service) Retry(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
+	return s.store.Requeue(ctx, id)
 }

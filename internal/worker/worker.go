@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/hkln4/go-notification-service/internal/breaker"
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/observability"
@@ -53,6 +54,8 @@ type Config struct {
 	RetryDelays []time.Duration
 	MaxAttempts int
 	Metrics     *observability.Metrics
+	// Breaker is optional; nil means no circuit breaking.
+	Breaker *breaker.Breaker
 }
 
 type Worker struct {
@@ -87,6 +90,18 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 	}
 	log := w.log.With("notification_id", msg.NotificationID, "channel", msg.Channel, "correlation_id", d.CorrelationId)
 
+	// Circuit open: the provider is failing for this channel. Park the
+	// message for the cooldown before taking a slot or an attempt.
+	ticket, allowed := w.allow(msg.Channel)
+	if !allowed {
+		log.Info("circuit open; parking message without using an attempt")
+		w.settle(d, log, w.republish(d, msg.Channel, w.policy.atLeast(w.cfg.Breaker.Cooldown())))
+		return
+	}
+	// If we return before the provider is called (no slot, claim lost),
+	// the breaker gets no verdict; a half-open trial slot is freed.
+	defer ticket.Report(breaker.Abort)
+
 	// The slot is taken before the claim, so time spent waiting for it does
 	// not eat into the lease and does not count as an attempt. If no slot is
 	// free within TokenWait, or Redis is down (fail closed), the message
@@ -109,6 +124,7 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 	res, sendErr := w.sender.Send(ctx, n.ID, n.CorrelationID, provider.Request{
 		To: n.Recipient, Channel: string(n.Channel), Content: n.Content,
 	})
+	ticket.Report(breakerOutcome(res, sendErr))
 	if err := w.finish(d, n, lease, res, sendErr, log); err != nil {
 		// The outcome is not durable. Leave the message for redelivery: the
 		// lease expires and the next claim tries again.
@@ -117,6 +133,22 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 	_ = d.Ack(false)
+}
+
+func (w *Worker) allow(ch domain.Channel) (*breaker.Ticket, bool) {
+	if w.cfg.Breaker == nil {
+		return nil, true
+	}
+	return w.cfg.Breaker.Allow(string(ch))
+}
+
+// breakerOutcome: only failures that say the provider is unhealthy count.
+// A 4xx means the provider is fine and the request was bad.
+func breakerOutcome(res provider.Result, err error) breaker.Outcome {
+	if err != nil || res.StatusCode >= 500 || res.StatusCode == 429 {
+		return breaker.Failure
+	}
+	return breaker.Success
 }
 
 // claim takes the lease. When it can't, it settles the delivery itself and

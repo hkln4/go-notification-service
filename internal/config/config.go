@@ -174,24 +174,30 @@ type Worker struct {
 	RetryDelays     []time.Duration
 	MaxAttempts     int
 	ShutdownTimeout time.Duration
+	// BreakerThreshold consecutive transient failures open a channel's
+	// circuit for BreakerCooldown. A threshold of 0 disables the breaker.
+	BreakerThreshold int
+	BreakerCooldown  time.Duration
 }
 
 func LoadWorker(r *Reader) (Worker, error) {
 	c := Worker{
-		DatabaseURL:     r.String("DATABASE_URL", DefaultDatabaseURL),
-		AMQPURL:         r.String("AMQP_URL", DefaultAMQPURL),
-		RedisAddr:       r.String("REDIS_ADDR", "localhost:6379"),
-		ProviderURL:     r.String("PROVIDER_URL", "http://localhost:9090/"),
-		MetricsAddr:     r.String("METRICS_ADDR", ":9100"),
-		LogLevel:        r.String("LOG_LEVEL", DefaultLogLevel),
-		RatePerSecond:   r.Int("RATE_LIMIT_PER_SECOND", 100),
-		Prefetch:        r.Int("WORKER_PREFETCH", 10),
-		Lease:           r.Duration("WORKER_LEASE", 30*time.Second),
-		TokenWait:       r.Duration("TOKEN_WAIT", 10*time.Second),
-		ProviderTimeout: r.Duration("PROVIDER_TIMEOUT", 5*time.Second),
-		RetryDelays:     r.Durations("RETRY_DELAYS", DefaultRetryDelays),
-		MaxAttempts:     r.Int("MAX_ATTEMPTS", 5),
-		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		DatabaseURL:      r.String("DATABASE_URL", DefaultDatabaseURL),
+		AMQPURL:          r.String("AMQP_URL", DefaultAMQPURL),
+		RedisAddr:        r.String("REDIS_ADDR", "localhost:6379"),
+		ProviderURL:      r.String("PROVIDER_URL", "http://localhost:9090/"),
+		MetricsAddr:      r.String("METRICS_ADDR", ":9100"),
+		LogLevel:         r.String("LOG_LEVEL", DefaultLogLevel),
+		RatePerSecond:    r.Int("RATE_LIMIT_PER_SECOND", 100),
+		Prefetch:         r.Int("WORKER_PREFETCH", 10),
+		Lease:            r.Duration("WORKER_LEASE", 30*time.Second),
+		TokenWait:        r.Duration("TOKEN_WAIT", 10*time.Second),
+		ProviderTimeout:  r.Duration("PROVIDER_TIMEOUT", 5*time.Second),
+		RetryDelays:      r.Durations("RETRY_DELAYS", DefaultRetryDelays),
+		MaxAttempts:      r.Int("MAX_ATTEMPTS", 5),
+		ShutdownTimeout:  r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		BreakerThreshold: r.Int("BREAKER_THRESHOLD", 10),
+		BreakerCooldown:  r.Duration("BREAKER_COOLDOWN", 30*time.Second),
 	}
 	if err := r.Err(); err != nil {
 		return c, err

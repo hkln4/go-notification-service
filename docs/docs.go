@@ -315,6 +315,47 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/notifications/{id}/retry": {
+            "post": {
+                "description": "Gives a failed (dead-lettered) notification a fresh set of attempts and queues it again. Only failed notifications can be retried.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Retry a failed notification",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Notification ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.notificationResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {

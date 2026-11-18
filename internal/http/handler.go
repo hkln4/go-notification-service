@@ -24,6 +24,7 @@ type NotificationService interface {
 	CreateBatch(ctx context.Context, req service.CreateBatchRequest) (service.BatchResult, error)
 	GetBatch(ctx context.Context, id uuid.UUID) (service.BatchSummary, error)
 	List(ctx context.Context, q service.ListQuery) (service.Page, error)
+	Retry(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
 
 type Handler struct {
@@ -63,6 +64,7 @@ func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/notifications", h.listNotifications)
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.getNotification)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/cancel", h.cancelNotification)
+	mux.HandleFunc("POST /api/v1/notifications/{id}/retry", h.retryNotification)
 	mux.Handle("POST /api/v1/notifications/batch", opts.Backpressure.wrap(http.HandlerFunc(h.createBatch)))
 	mux.HandleFunc("GET /api/v1/batches/{id}", h.getBatch)
 
@@ -160,6 +162,30 @@ func (h *Handler) cancelNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toNotificationResponse(n))
+}
+
+// retryNotification godoc
+//
+//	@Summary		Retry a failed notification
+//	@Description	Gives a failed (dead-lettered) notification a fresh set of attempts and queues it again. Only failed notifications can be retried.
+//	@Tags			notifications
+//	@Produce		json
+//	@Param			id	path		string	true	"Notification ID"
+//	@Success		202	{object}	notificationResponse
+//	@Failure		404	{object}	errorBody
+//	@Failure		409	{object}	errorBody
+//	@Router			/notifications/{id}/retry [post]
+func (h *Handler) retryNotification(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	n, err := h.svc.Retry(r.Context(), id)
+	if err != nil {
+		writeServiceError(r.Context(), w, h.log, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, toNotificationResponse(n))
 }
 
 // createBatch godoc

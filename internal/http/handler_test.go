@@ -88,6 +88,13 @@ func (f *fakeService) List(_ context.Context, q service.ListQuery) (service.Page
 	return service.Page{Items: []domain.Notification{{ID: knownID}}, NextCursor: "next"}, nil
 }
 
+func (f *fakeService) Retry(_ context.Context, id uuid.UUID) (domain.Notification, error) {
+	if id != knownID {
+		return domain.Notification{}, domain.ErrNotFound
+	}
+	return domain.Notification{ID: id, Status: domain.StatusPending}, nil
+}
+
 func do(t *testing.T, h http.Handler, method, path, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -144,6 +151,8 @@ func TestHandlerStatusCodes(t *testing.T) {
 		{"create replayed", &fakeService{}, "POST", "/api/v1/notifications", validBody, 200, ""},
 		{"create key mismatch", &fakeService{createErr: domain.ErrIdempotencyMismatch}, "POST", "/api/v1/notifications", validBody, 409, codeIdempotency},
 		{"batch item key conflict", &fakeService{createErr: &domain.IdempotencyConflictError{}}, "POST", "/api/v1/notifications/batch", `{"notifications":[]}`, 409, codeIdempotency},
+		{"retry", &fakeService{}, "POST", "/api/v1/notifications/" + knownID.String() + "/retry", "", 202, ""},
+		{"retry missing", &fakeService{}, "POST", "/api/v1/notifications/" + uuid.NewString() + "/retry", "", 404, codeNotFound},
 		{"health", &fakeService{}, "GET", "/health", "", 200, ""},
 		{"ready", &fakeService{}, "GET", "/ready", "", 200, ""},
 		{"metrics", &fakeService{}, "GET", "/metrics", "", 200, ""},

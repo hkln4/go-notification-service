@@ -15,6 +15,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/hkln4/go-notification-service/internal/breaker"
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/config"
 	"github.com/hkln4/go-notification-service/internal/observability"
@@ -68,6 +69,18 @@ func run() error {
 	go serveOps(ops, log)
 	defer func() { _ = ops.Close() }()
 
+	var cb *breaker.Breaker
+	if cfg.BreakerThreshold > 0 {
+		cb = breaker.New(breaker.Config{
+			Threshold: cfg.BreakerThreshold,
+			Cooldown:  cfg.BreakerCooldown,
+			OnChange: func(channel string, s breaker.State) {
+				metrics.BreakerState(channel, int(s))
+				log.Warn("circuit breaker state changed", "channel", channel, "state", s.String())
+			},
+		})
+	}
+
 	w := worker.New(
 		postgres.New(pool),
 		mq,
@@ -75,7 +88,7 @@ func run() error {
 		ratelimit.NewRedis(rdb, cfg.RatePerSecond),
 		worker.Config{
 			Lease: cfg.Lease, TokenWait: cfg.TokenWait, RetryDelays: cfg.RetryDelays,
-			MaxAttempts: cfg.MaxAttempts, Metrics: metrics,
+			MaxAttempts: cfg.MaxAttempts, Metrics: metrics, Breaker: cb,
 		},
 		log,
 	)

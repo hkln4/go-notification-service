@@ -164,6 +164,19 @@ func (f *fakeStore) ListNotifications(_ context.Context, lf domain.ListFilter) (
 	return out, nil
 }
 
+func (f *fakeStore) Requeue(_ context.Context, id uuid.UUID) (domain.Notification, error) {
+	n, ok := f.notifications[id]
+	if !ok {
+		return domain.Notification{}, domain.ErrNotFound
+	}
+	if n.Status != domain.StatusFailed {
+		return n, domain.ErrInvalidState
+	}
+	n.Status, n.Attempts = domain.StatusPending, 0
+	f.notifications[id] = n
+	return n, nil
+}
+
 var fixedNow = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 
 func newTestService(store Store) *Service {

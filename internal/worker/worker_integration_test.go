@@ -269,3 +269,30 @@ func TestProvider500EndsInDLQAfterFiveAttempts(t *testing.T) {
 		return err == nil && depth == 1
 	}, 5*time.Second, 50*time.Millisecond, "message must be in the DLQ")
 }
+
+// A notification that ended in the DLQ is retried through the API path once
+// the provider has recovered: fresh attempts, new outbox row, delivered.
+func TestRequeueFromDLQIsDelivered(t *testing.T) {
+	e := newEnv(t, 0)
+	e.status = http.StatusInternalServerError
+	e.start(t)
+	id := e.create(t)
+	e.waitStatus(t, id, domain.StatusFailed)
+
+	e.mu.Lock()
+	e.status = 0 // provider recovered
+	e.mu.Unlock()
+	n, err := e.svc.Retry(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusPending, n.Status)
+	require.Zero(t, n.Attempts)
+
+	n = e.waitStatus(t, id, domain.StatusSent)
+	require.Equal(t, 1, n.Attempts, "attempts start over")
+	attempts, err := e.store.ListAttempts(context.Background(), id)
+	require.NoError(t, err)
+	require.Len(t, attempts, 6, "history is kept: 5 failed + 1 sent")
+
+	_, err = e.svc.Retry(context.Background(), id)
+	require.ErrorIs(t, err, domain.ErrInvalidState, "only failed notifications can be retried")
+}

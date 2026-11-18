@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -196,3 +197,42 @@ func nullIfEmpty(s string) *string {
 	}
 	return &s
 }
+
+// Requeue gives a failed notification a fresh set of attempts: status back
+// to pending, attempts reset and a new outbox row, in one transaction. The
+// copy left in the DLQ stays there as a record; if it is ever replayed, the
+// claim simply treats it as one more duplicate.
+func (s *Store) Requeue(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
+	var n domain.Notification
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		n, err = scanNotification(tx.QueryRow(ctx,
+			`UPDATE notifications
+			 SET status = 'pending', attempts = 0, last_error = NULL, updated_at = now()
+			 WHERE id = $1 AND status = 'failed'
+			 RETURNING `+notificationColumns, id))
+		if isNoRows(err) {
+			return errNotRequeueable
+		}
+		if err != nil {
+			return fmt.Errorf("requeue notification: %w", err)
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO outbox (notification_id, routing_key, priority, headers) VALUES ($1, $2, $3, $4)`,
+			n.ID, string(n.Channel), n.Priority, outboxHeaders(&n))
+		if err != nil {
+			return fmt.Errorf("requeue outbox: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(err, errNotRequeueable) {
+		cur, err := s.GetNotification(ctx, id)
+		if err != nil {
+			return domain.Notification{}, err
+		}
+		return cur, fmt.Errorf("only failed notifications can be retried, this one is %s: %w", cur.Status, domain.ErrInvalidState)
+	}
+	return n, err
+}
+
+var errNotRequeueable = errors.New("not requeueable")

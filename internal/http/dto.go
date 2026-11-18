@@ -96,3 +96,38 @@ func toDetailResponse(d service.NotificationDetail) notificationDetailResponse {
 		DeliveryAttempts:     attempts,
 	}
 }
+
+type createBatchRequest struct {
+	Notifications []createNotificationRequest `json:"notifications"`
+}
+
+type createBatchResponse struct {
+	BatchID         string   `json:"batchId"`
+	Count           int      `json:"count"`
+	NotificationIDs []string `json:"notificationIds"`
+}
+
+func toCreateBatchResponse(b domain.Batch, ns []domain.Notification) createBatchResponse {
+	ids := make([]string, len(ns))
+	for i, n := range ns {
+		ids[i] = n.ID.String()
+	}
+	return createBatchResponse{BatchID: b.ID.String(), Count: len(ns), NotificationIDs: ids}
+}
+
+type batchResponse struct {
+	ID           string         `json:"id"`
+	TotalCount   int            `json:"totalCount"`
+	StatusCounts map[string]int `json:"statusCounts"`
+	CreatedAt    time.Time      `json:"createdAt"`
+}
+
+// toBatchResponse lists every status, including zeros, so clients don't have
+// to treat a missing key as zero.
+func toBatchResponse(b service.BatchSummary) batchResponse {
+	counts := make(map[string]int, len(domain.Statuses))
+	for _, st := range domain.Statuses {
+		counts[string(st)] = b.StatusCounts[st]
+	}
+	return batchResponse{ID: b.ID.String(), TotalCount: b.TotalCount, StatusCounts: counts, CreatedAt: b.CreatedAt}
+}

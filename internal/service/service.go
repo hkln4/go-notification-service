@@ -18,6 +18,7 @@ type Store interface {
 	GetNotification(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	ListAttempts(ctx context.Context, id uuid.UUID) ([]domain.Attempt, error)
 	Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error)
+	GetBatch(ctx context.Context, id uuid.UUID) (domain.Batch, map[domain.Status]int, error)
 }
 
 type Service struct {

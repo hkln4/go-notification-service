@@ -24,6 +24,7 @@ var knownID = uuid.MustParse("01934a5c-0000-7000-8000-000000000001")
 type fakeService struct {
 	createErr error
 	lastReq   service.CreateRequest
+	lastBatch service.CreateBatchRequest
 	panicOn   string
 }
 
@@ -50,6 +51,28 @@ func (f *fakeService) Cancel(_ context.Context, id uuid.UUID) (domain.Notificati
 		return domain.Notification{}, domain.ErrNotFound
 	}
 	return domain.Notification{ID: id, Status: domain.StatusProcessing}, domain.ErrInvalidState
+}
+
+func (f *fakeService) CreateBatch(_ context.Context, req service.CreateBatchRequest) (domain.Batch, []domain.Notification, error) {
+	f.lastBatch = req
+	if f.createErr != nil {
+		return domain.Batch{}, nil, f.createErr
+	}
+	ns := make([]domain.Notification, len(req.Items))
+	for i := range ns {
+		ns[i] = domain.Notification{ID: uuid.New()}
+	}
+	return domain.Batch{ID: knownID, TotalCount: len(ns)}, ns, nil
+}
+
+func (f *fakeService) GetBatch(_ context.Context, id uuid.UUID) (service.BatchSummary, error) {
+	if id != knownID {
+		return service.BatchSummary{}, domain.ErrNotFound
+	}
+	return service.BatchSummary{
+		Batch:        domain.Batch{ID: id, TotalCount: 3},
+		StatusCounts: map[domain.Status]int{domain.StatusSent: 2, domain.StatusFailed: 1},
+	}, nil
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string, headers ...string) *httptest.ResponseRecorder {
@@ -100,6 +123,10 @@ func TestHandlerStatusCodes(t *testing.T) {
 		{"get missing", &fakeService{}, "GET", "/api/v1/notifications/" + uuid.NewString(), "", 404, codeNotFound},
 		{"cancel processing", &fakeService{}, "POST", "/api/v1/notifications/" + knownID.String() + "/cancel", "", 409, codeInvalidState},
 		{"cancel missing", &fakeService{}, "POST", "/api/v1/notifications/" + uuid.NewString() + "/cancel", "", 404, codeNotFound},
+		{"batch", &fakeService{}, "POST", "/api/v1/notifications/batch", `{"notifications":[` + validBody + `,` + validBody + `]}`, 202, ""},
+		{"batch validation", &fakeService{createErr: &domain.ValidationError{}}, "POST", "/api/v1/notifications/batch", `{"notifications":[]}`, 400, codeValidation},
+		{"get batch", &fakeService{}, "GET", "/api/v1/batches/" + knownID.String(), "", 200, ""},
+		{"get batch missing", &fakeService{}, "GET", "/api/v1/batches/" + uuid.NewString(), "", 404, codeNotFound},
 		{"wrong method", &fakeService{}, "DELETE", "/api/v1/notifications/" + knownID.String(), "", 405, ""},
 	}
 	for _, tt := range tests {
@@ -178,5 +205,32 @@ func TestGetIncludesDeliveryAttemptsArray(t *testing.T) {
 	}
 	if body["id"] != knownID.String() || body["status"] != "sent" {
 		t.Fatalf("embedded fields not flattened: %s", rec.Body)
+	}
+}
+
+func TestBatchResponses(t *testing.T) {
+	svc := &fakeService{}
+	h := newTestHandler(svc)
+	item := `{"channel":"push","recipient":"tok","content":"hi"}`
+
+	rec := do(t, h, "POST", "/api/v1/notifications/batch", `{"notifications":[`+item+`,`+item+`]}`, "X-Correlation-ID", "b-1")
+	var created createBatchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.BatchID != knownID.String() || created.Count != 2 || len(created.NotificationIDs) != 2 {
+		t.Errorf("create response = %+v", created)
+	}
+	if len(svc.lastBatch.Items) != 2 || svc.lastBatch.Items[0].Channel != "push" || svc.lastBatch.CorrelationID != "b-1" {
+		t.Errorf("service got %+v", svc.lastBatch)
+	}
+
+	rec = do(t, h, "GET", "/api/v1/batches/"+knownID.String(), "")
+	var got batchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.StatusCounts) != len(domain.Statuses) || got.StatusCounts["sent"] != 2 || got.StatusCounts["pending"] != 0 {
+		t.Errorf("statusCounts = %v; want every status present", got.StatusCounts)
 	}
 }

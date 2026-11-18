@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration lint lint-docker fmt tidy up down migrate-up migrate-down swagger
+.PHONY: build run test test-integration lint lint-docker fmt tidy up down migrate-up migrate-down swagger loadtest
 
 build:
 	go build -o bin/ ./cmd/...
@@ -43,3 +43,7 @@ SWAG_VERSION := v1.16.6
 swagger:
 	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init -g cmd/api/main.go -o docs --parseInternal --outputTypes go,json,yaml
 	gofmt -w docs
+
+# Needs the stack: docker compose up -d --scale worker=3
+loadtest:
+	./loadtest/run.sh

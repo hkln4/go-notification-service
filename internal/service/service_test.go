@@ -20,24 +20,77 @@ type fakeStore struct {
 	inserts       int
 	insertErr     error
 	lastFilter    domain.ListFilter
+	// beforeInsert runs once, just before the next insert; used to simulate
+	// a concurrent request committing first.
+	beforeInsert func()
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{notifications: map[uuid.UUID]domain.Notification{}, batches: map[uuid.UUID]domain.Batch{}}
 }
 
+// InsertNotifications mimics the store's ON CONFLICT behaviour: a taken key
+// rejects the whole insert with ErrDuplicateKey.
 func (f *fakeStore) InsertNotifications(_ context.Context, b *domain.Batch, ns []domain.Notification) error {
 	if f.insertErr != nil {
 		return f.insertErr
+	}
+	if f.beforeInsert != nil {
+		hook := f.beforeInsert
+		f.beforeInsert = nil
+		hook()
+	}
+	if b != nil && b.IdempotencyKey != nil {
+		for _, prev := range f.batches {
+			if prev.IdempotencyKey != nil && *prev.IdempotencyKey == *b.IdempotencyKey {
+				return domain.ErrDuplicateKey
+			}
+		}
+	}
+	for _, n := range ns {
+		if n.IdempotencyKey == nil {
+			continue
+		}
+		for _, prev := range f.notifications {
+			if prev.IdempotencyKey != nil && *prev.IdempotencyKey == *n.IdempotencyKey {
+				return domain.ErrDuplicateKey
+			}
+		}
 	}
 	f.inserts++
 	if b != nil {
 		f.batches[b.ID] = *b
 	}
-	for _, n := range ns {
-		f.notifications[n.ID] = n
+	for i := range ns {
+		ns[i].CreatedAt = fixedNow
+		f.notifications[ns[i].ID] = ns[i]
 	}
 	return nil
+}
+
+func (f *fakeStore) FindByIdempotencyKeys(_ context.Context, keys []string) (map[string]domain.Notification, error) {
+	found := map[string]domain.Notification{}
+	for _, n := range f.notifications {
+		if n.IdempotencyKey != nil && slices.Contains(keys, *n.IdempotencyKey) {
+			found[*n.IdempotencyKey] = n
+		}
+	}
+	return found, nil
+}
+
+func (f *fakeStore) FindBatchByIdempotencyKey(_ context.Context, key string) (domain.Batch, []uuid.UUID, error) {
+	for _, b := range f.batches {
+		if b.IdempotencyKey != nil && *b.IdempotencyKey == key {
+			var ids []uuid.UUID
+			for _, n := range f.notifications {
+				if n.BatchID != nil && *n.BatchID == b.ID {
+					ids = append(ids, n.ID)
+				}
+			}
+			return b, ids, nil
+		}
+	}
+	return domain.Batch{}, nil, domain.ErrNotFound
 }
 
 func (f *fakeStore) GetNotification(_ context.Context, id uuid.UUID) (domain.Notification, error) {
@@ -131,7 +184,8 @@ func TestCreate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newFakeStore()
-			n, err := newTestService(store).Create(context.Background(), CreateRequest{Input: tt.input, CorrelationID: "c1"})
+			res, err := newTestService(store).Create(context.Background(), CreateRequest{Input: tt.input, CorrelationID: "c1"})
+			n := res.Notification
 			if tt.wantErr {
 				var verr *domain.ValidationError
 				if !errors.As(err, &verr) {
@@ -145,7 +199,7 @@ func TestCreate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n.Status != tt.wantStatus || n.CorrelationID != "c1" || n.ID.Version() != 7 {
+			if n.Status != tt.wantStatus || n.CorrelationID != "c1" || n.ID.Version() != 7 || n.CreatedAt.IsZero() {
 				t.Fatalf("got status=%s corr=%q version=%d", n.Status, n.CorrelationID, n.ID.Version())
 			}
 			if _, ok := store.notifications[n.ID]; !ok {
@@ -171,10 +225,11 @@ func TestGetAndCancel(t *testing.T) {
 	svc := newTestService(store)
 	ctx := context.Background()
 
-	n, err := svc.Create(ctx, CreateRequest{Input: domain.NotificationInput{Channel: "push", Recipient: "tok", Content: "hi"}})
+	res, err := svc.Create(ctx, CreateRequest{Input: domain.NotificationInput{Channel: "push", Recipient: "tok", Content: "hi"}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	n := res.Notification
 	got, err := svc.Get(ctx, n.ID)
 	if err != nil || got.ID != n.ID {
 		t.Fatalf("Get = %+v, %v", got, err)
@@ -188,38 +243,41 @@ func TestGetAndCancel(t *testing.T) {
 }
 
 func TestCreateBatch(t *testing.T) {
-	valid := domain.NotificationInput{Channel: "sms", Recipient: "+905551234567", Content: "hi"}
-	invalid := domain.NotificationInput{Channel: "sms", Recipient: "bad", Content: ""}
-	many := make([]domain.NotificationInput, MaxBatchSize+1)
+	valid := BatchItem{Input: domain.NotificationInput{Channel: "sms", Recipient: "+905551234567", Content: "hi"}}
+	invalid := BatchItem{Input: domain.NotificationInput{Channel: "sms", Recipient: "bad", Content: ""}}
+	many := make([]BatchItem, MaxBatchSize+1)
 	for i := range many {
 		many[i] = valid
 	}
 
 	tests := []struct {
 		name        string
-		items       []domain.NotificationInput
+		items       []BatchItem
 		wantIndexes []int // indexes reported invalid; nil means accepted
 	}{
-		{"accepted", []domain.NotificationInput{valid, valid, valid}, nil},
+		{"accepted", []BatchItem{valid, valid, valid}, nil},
 		{"max size accepted", many[:MaxBatchSize], nil},
 		{"empty", nil, []int{-1}},
 		{"too many", many, []int{-1}},
-		{"one bad item rejects all", []domain.NotificationInput{valid, invalid, valid, invalid}, []int{1, 1, 3, 3}},
+		{"one bad item rejects all", []BatchItem{valid, invalid, valid, invalid}, []int{1, 1, 3, 3}},
+		{"bad item key", []BatchItem{valid, {Input: valid.Input, IdempotencyKey: "has space"}}, []int{1}},
+		{"key repeated within batch", []BatchItem{{Input: valid.Input, IdempotencyKey: "k"}, valid, {Input: valid.Input, IdempotencyKey: "k"}}, []int{2}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newFakeStore()
-			b, ns, err := newTestService(store).CreateBatch(context.Background(), CreateBatchRequest{Items: tt.items, CorrelationID: "c"})
+			res, err := newTestService(store).CreateBatch(context.Background(), CreateBatchRequest{Items: tt.items, CorrelationID: "c"})
 
 			if tt.wantIndexes == nil {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if b.TotalCount != len(tt.items) || len(ns) != len(tt.items) || store.inserts != 1 {
-					t.Fatalf("total=%d stored=%d inserts=%d", b.TotalCount, len(ns), store.inserts)
+				if res.Batch.TotalCount != len(tt.items) || len(res.NotificationIDs) != len(tt.items) || store.inserts != 1 {
+					t.Fatalf("total=%d ids=%d inserts=%d", res.Batch.TotalCount, len(res.NotificationIDs), store.inserts)
 				}
-				for _, n := range ns {
-					if n.BatchID == nil || *n.BatchID != b.ID || n.CorrelationID != "c" {
+				for _, id := range res.NotificationIDs {
+					n := store.notifications[id]
+					if n.BatchID == nil || *n.BatchID != res.Batch.ID || n.CorrelationID != "c" {
 						t.Fatalf("notification not linked to batch: %+v", n)
 					}
 				}
@@ -254,14 +312,14 @@ func TestGetBatch(t *testing.T) {
 	ctx := context.Background()
 	in := domain.NotificationInput{Channel: "push", Recipient: "tok", Content: "hi"}
 
-	b, ns, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []domain.NotificationInput{in, in}})
+	res, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{{Input: in}, {Input: in}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Cancel(ctx, ns[0].ID); err != nil {
+	if _, err := svc.Cancel(ctx, res.NotificationIDs[0]); err != nil {
 		t.Fatal(err)
 	}
-	got, err := svc.GetBatch(ctx, b.ID)
+	got, err := svc.GetBatch(ctx, res.Batch.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

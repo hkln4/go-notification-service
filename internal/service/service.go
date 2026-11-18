@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,8 @@ type Store interface {
 	Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	GetBatch(ctx context.Context, id uuid.UUID) (domain.Batch, map[domain.Status]int, error)
 	ListNotifications(ctx context.Context, f domain.ListFilter) ([]domain.Notification, error)
+	FindByIdempotencyKeys(ctx context.Context, keys []string) (map[string]domain.Notification, error)
+	FindBatchByIdempotencyKey(ctx context.Context, key string) (domain.Batch, []uuid.UUID, error)
 }
 
 type Service struct {
@@ -54,20 +57,61 @@ func newUUIDv7() uuid.UUID {
 type CreateRequest struct {
 	Input         domain.NotificationInput
 	CorrelationID string
+	// IdempotencyKey is optional. Without it a retried request creates a
+	// second notification.
+	IdempotencyKey string
+}
+
+// CreateResult says whether the notification was created by this call or
+// returned from an earlier call with the same idempotency key.
+type CreateResult struct {
+	Notification domain.Notification
+	Replayed     bool
 }
 
 // Create validates the request and stores the notification together with its
 // outbox row. It never talks to the broker; the relay does that.
-func (s *Service) Create(ctx context.Context, req CreateRequest) (domain.Notification, error) {
+//
+// With an idempotency key: same key and same request returns the stored
+// notification (Replayed); same key and a different request returns
+// domain.ErrIdempotencyMismatch.
+func (s *Service) Create(ctx context.Context, req CreateRequest) (CreateResult, error) {
 	nn, err := req.Input.Validate(s.now())
 	if err != nil {
-		return domain.Notification{}, err
+		return CreateResult{}, err
 	}
-	ns := []domain.Notification{s.build(nn, req.CorrelationID, nil)}
-	if err := s.store.InsertNotifications(ctx, nil, ns); err != nil {
-		return domain.Notification{}, err
+	n := s.build(nn, req.CorrelationID, nil)
+	if req.IdempotencyKey == "" {
+		ns := []domain.Notification{n}
+		err := s.store.InsertNotifications(ctx, nil, ns)
+		return CreateResult{Notification: ns[0]}, err
 	}
-	return ns[0], nil
+	if !validKey(req.IdempotencyKey) {
+		return CreateResult{}, keyError("Idempotency-Key", nil)
+	}
+	n.IdempotencyKey, n.RequestHash = &req.IdempotencyKey, ptr(requestHash(nn))
+
+	// Read first; if the insert then loses a race to a concurrent request
+	// with the same key, read again: the winner has committed by then.
+	for range 2 {
+		found, err := s.store.FindByIdempotencyKeys(ctx, []string{req.IdempotencyKey})
+		if err != nil {
+			return CreateResult{}, err
+		}
+		if prev, ok := found[req.IdempotencyKey]; ok {
+			if *prev.RequestHash != *n.RequestHash {
+				return CreateResult{}, domain.ErrIdempotencyMismatch
+			}
+			return CreateResult{Notification: prev, Replayed: true}, nil
+		}
+		ns := []domain.Notification{n}
+		err = s.store.InsertNotifications(ctx, nil, ns)
+		if errors.Is(err, domain.ErrDuplicateKey) {
+			continue
+		}
+		return CreateResult{Notification: ns[0]}, err
+	}
+	return CreateResult{}, domain.ErrDuplicateKey
 }
 
 func (s *Service) build(nn domain.NewNotification, correlationID string, batchID *uuid.UUID) domain.Notification {

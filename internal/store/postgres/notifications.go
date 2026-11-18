@@ -31,15 +31,25 @@ func scanNotification(row pgx.Row) (domain.Notification, error) {
 // transaction. This is the transactional outbox: a notification is never
 // stored without the event that will deliver it, and vice versa.
 //
+// If any idempotency key is already taken, nothing is written and
+// domain.ErrDuplicateKey is returned. A concurrent insert of the same key
+// blocks on the unique index until the other transaction finishes, so this
+// also catches a race that the caller's read-before-insert missed.
+//
 // CreatedAt and UpdatedAt are filled from the database clock.
 func (s *Store) InsertNotifications(ctx context.Context, batch *domain.Batch, ns []domain.Notification) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		if batch != nil {
 			err := tx.QueryRow(ctx,
 				`INSERT INTO batches (id, idempotency_key, request_hash, total_count)
-				 VALUES ($1, $2, $3, $4) RETURNING created_at`,
+				 VALUES ($1, $2, $3, $4)
+				 ON CONFLICT (idempotency_key) DO NOTHING
+				 RETURNING created_at`,
 				batch.ID, batch.IdempotencyKey, batch.RequestHash, batch.TotalCount,
 			).Scan(&batch.CreatedAt)
+			if isNoRows(err) {
+				return domain.ErrDuplicateKey
+			}
 			if err != nil {
 				return fmt.Errorf("insert batch: %w", err)
 			}
@@ -58,11 +68,16 @@ func insertNotifications(ctx context.Context, tx pgx.Tx, ns []domain.Notificatio
 			(id, batch_id, idempotency_key, request_hash, channel, recipient, content,
 			 priority, status, scheduled_at, correlation_id)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT (idempotency_key) DO NOTHING
 			RETURNING created_at, updated_at`,
 			n.ID, n.BatchID, n.IdempotencyKey, n.RequestHash, n.Channel, n.Recipient, n.Content,
 			n.Priority, n.Status, n.ScheduledAt, nullIfEmpty(n.CorrelationID),
 		).QueryRow(func(row pgx.Row) error {
-			return row.Scan(&n.CreatedAt, &n.UpdatedAt)
+			err := row.Scan(&n.CreatedAt, &n.UpdatedAt)
+			if isNoRows(err) {
+				return domain.ErrDuplicateKey
+			}
+			return err
 		})
 
 		// Scheduled notifications become visible to the relay at scheduled_at;
@@ -148,6 +163,30 @@ func (s *Store) Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, 
 		return cur, nil
 	}
 	return cur, fmt.Errorf("cannot cancel a %s notification: %w", cur.Status, domain.ErrInvalidState)
+}
+
+// FindByIdempotencyKeys returns the notifications holding any of the keys,
+// indexed by key.
+func (s *Store) FindByIdempotencyKeys(ctx context.Context, keys []string) (map[string]domain.Notification, error) {
+	found := map[string]domain.Notification{}
+	if len(keys) == 0 {
+		return found, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+notificationColumns+` FROM notifications WHERE idempotency_key = ANY($1)`, keys)
+	if err != nil {
+		return nil, fmt.Errorf("find by idempotency keys: %w", err)
+	}
+	ns, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Notification, error) {
+		return scanNotification(row)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find by idempotency keys: %w", err)
+	}
+	for _, n := range ns {
+		found[*n.IdempotencyKey] = n
+	}
+	return found, nil
 }
 
 func nullIfEmpty(s string) *string {

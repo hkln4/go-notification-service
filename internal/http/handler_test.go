@@ -29,15 +29,16 @@ type fakeService struct {
 	panicOn   string
 }
 
-func (f *fakeService) Create(_ context.Context, req service.CreateRequest) (domain.Notification, error) {
+func (f *fakeService) Create(_ context.Context, req service.CreateRequest) (service.CreateResult, error) {
 	if f.panicOn == "create" {
 		panic("boom")
 	}
 	f.lastReq = req
 	if f.createErr != nil {
-		return domain.Notification{}, f.createErr
+		return service.CreateResult{}, f.createErr
 	}
-	return domain.Notification{ID: knownID, Channel: domain.ChannelSMS, Status: domain.StatusPending, Priority: domain.PriorityHigh}, nil
+	n := domain.Notification{ID: knownID, Channel: domain.ChannelSMS, Status: domain.StatusPending, Priority: domain.PriorityHigh}
+	return service.CreateResult{Notification: n, Replayed: req.IdempotencyKey == "seen"}, nil
 }
 
 func (f *fakeService) Get(_ context.Context, id uuid.UUID) (service.NotificationDetail, error) {
@@ -54,16 +55,20 @@ func (f *fakeService) Cancel(_ context.Context, id uuid.UUID) (domain.Notificati
 	return domain.Notification{ID: id, Status: domain.StatusProcessing}, domain.ErrInvalidState
 }
 
-func (f *fakeService) CreateBatch(_ context.Context, req service.CreateBatchRequest) (domain.Batch, []domain.Notification, error) {
+func (f *fakeService) CreateBatch(_ context.Context, req service.CreateBatchRequest) (service.BatchResult, error) {
 	f.lastBatch = req
 	if f.createErr != nil {
-		return domain.Batch{}, nil, f.createErr
+		return service.BatchResult{}, f.createErr
 	}
-	ns := make([]domain.Notification, len(req.Items))
-	for i := range ns {
-		ns[i] = domain.Notification{ID: uuid.New()}
+	ids := make([]uuid.UUID, len(req.Items))
+	for i := range ids {
+		ids[i] = uuid.New()
 	}
-	return domain.Batch{ID: knownID, TotalCount: len(ns)}, ns, nil
+	return service.BatchResult{
+		Batch:           domain.Batch{ID: knownID, TotalCount: len(ids)},
+		NotificationIDs: ids,
+		Replayed:        req.IdempotencyKey == "seen",
+	}, nil
 }
 
 func (f *fakeService) GetBatch(_ context.Context, id uuid.UUID) (service.BatchSummary, error) {
@@ -136,11 +141,18 @@ func TestHandlerStatusCodes(t *testing.T) {
 		{"list", &fakeService{}, "GET", "/api/v1/notifications?status=sent&limit=10", "", 200, ""},
 		{"list bad from", &fakeService{}, "GET", "/api/v1/notifications?from=yesterday", "", 400, codeValidation},
 		{"list bad limit", &fakeService{}, "GET", "/api/v1/notifications?limit=ten", "", 400, codeValidation},
+		{"create replayed", &fakeService{}, "POST", "/api/v1/notifications", validBody, 200, ""},
+		{"create key mismatch", &fakeService{createErr: domain.ErrIdempotencyMismatch}, "POST", "/api/v1/notifications", validBody, 409, codeIdempotency},
+		{"batch item key conflict", &fakeService{createErr: &domain.IdempotencyConflictError{}}, "POST", "/api/v1/notifications/batch", `{"notifications":[]}`, 409, codeIdempotency},
 		{"wrong method", &fakeService{}, "DELETE", "/api/v1/notifications/" + knownID.String(), "", 405, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := do(t, newTestHandler(tt.svc), tt.method, tt.path, tt.body)
+			var headers []string
+			if strings.HasSuffix(tt.name, "replayed") {
+				headers = []string{"Idempotency-Key", "seen"}
+			}
+			rec := do(t, newTestHandler(tt.svc), tt.method, tt.path, tt.body, headers...)
 			if rec.Code != tt.want {
 				t.Fatalf("status = %d, want %d; body %s", rec.Code, tt.want, rec.Body)
 			}
@@ -230,7 +242,7 @@ func TestBatchResponses(t *testing.T) {
 	if created.BatchID != knownID.String() || created.Count != 2 || len(created.NotificationIDs) != 2 {
 		t.Errorf("create response = %+v", created)
 	}
-	if len(svc.lastBatch.Items) != 2 || svc.lastBatch.Items[0].Channel != "push" || svc.lastBatch.CorrelationID != "b-1" {
+	if len(svc.lastBatch.Items) != 2 || svc.lastBatch.Items[0].Input.Channel != "push" || svc.lastBatch.CorrelationID != "b-1" {
 		t.Errorf("service got %+v", svc.lastBatch)
 	}
 
@@ -261,5 +273,28 @@ func TestListParsesQuery(t *testing.T) {
 	var body listResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Items) != 1 || body.NextCursor != "next" {
 		t.Errorf("body = %s (%v)", rec.Body, err)
+	}
+}
+
+func TestIdempotencyKeysReachService(t *testing.T) {
+	svc := &fakeService{}
+	h := newTestHandler(svc)
+
+	do(t, h, "POST", "/api/v1/notifications", `{"channel":"push","recipient":"t","content":"c"}`, "Idempotency-Key", "k-1")
+	if svc.lastReq.IdempotencyKey != "k-1" {
+		t.Errorf("create key = %q", svc.lastReq.IdempotencyKey)
+	}
+
+	do(t, h, "POST", "/api/v1/notifications/batch",
+		`{"notifications":[{"channel":"push","recipient":"t","content":"c","idempotencyKey":"item-1"}]}`,
+		"Idempotency-Key", "batch-1")
+	if svc.lastBatch.IdempotencyKey != "batch-1" || svc.lastBatch.Items[0].IdempotencyKey != "item-1" {
+		t.Errorf("batch keys = %q / %q", svc.lastBatch.IdempotencyKey, svc.lastBatch.Items[0].IdempotencyKey)
+	}
+
+	// The single create endpoint takes its key from the header only.
+	rec := do(t, h, "POST", "/api/v1/notifications", `{"channel":"push","recipient":"t","content":"c","idempotencyKey":"x"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("idempotencyKey in a single create body: status %d, want 400", rec.Code)
 	}
 }

@@ -19,6 +19,7 @@ const (
 	codeInvalidState    = "invalid_state"
 	codePayloadTooLarge = "payload_too_large"
 	codeInternal        = "internal"
+	codeIdempotency     = "idempotency_conflict"
 )
 
 type errorBody struct {
@@ -45,9 +46,17 @@ func writeError(w http.ResponseWriter, status int, code, msg string, details any
 // is logged; its message is not exposed to the client.
 func writeServiceError(ctx context.Context, w http.ResponseWriter, log *slog.Logger, err error) {
 	var verr *domain.ValidationError
+	var conflict *domain.IdempotencyConflictError
 	switch {
 	case errors.As(err, &verr):
 		writeError(w, http.StatusBadRequest, codeValidation, "request validation failed", verr.Fields)
+	case errors.As(err, &conflict):
+		writeError(w, http.StatusConflict, codeIdempotency, conflict.Error(), conflict.Fields)
+	case errors.Is(err, domain.ErrIdempotencyMismatch):
+		writeError(w, http.StatusConflict, codeIdempotency, err.Error(), nil)
+	case errors.Is(err, domain.ErrDuplicateKey):
+		// Only after the retry also lost the race; the client can retry.
+		writeError(w, http.StatusConflict, codeIdempotency, "a concurrent request with the same idempotency key is in progress", nil)
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, "resource not found", nil)
 	case errors.Is(err, domain.ErrInvalidState):

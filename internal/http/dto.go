@@ -98,21 +98,33 @@ func toDetailResponse(d service.NotificationDetail) notificationDetailResponse {
 }
 
 type createBatchRequest struct {
-	Notifications []createNotificationRequest `json:"notifications"`
+	Notifications []batchItemRequest `json:"notifications"`
+}
+
+type batchItemRequest struct {
+	createNotificationRequest
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 }
 
 type createBatchResponse struct {
-	BatchID         string   `json:"batchId"`
+	BatchID string `json:"batchId"`
+	// Count is how many notifications this batch created.
 	Count           int      `json:"count"`
 	NotificationIDs []string `json:"notificationIds"`
+	Duplicates      []int    `json:"duplicates,omitempty"`
 }
 
-func toCreateBatchResponse(b domain.Batch, ns []domain.Notification) createBatchResponse {
-	ids := make([]string, len(ns))
-	for i, n := range ns {
-		ids[i] = n.ID.String()
+func toCreateBatchResponse(res service.BatchResult) createBatchResponse {
+	ids := make([]string, len(res.NotificationIDs))
+	for i, id := range res.NotificationIDs {
+		ids[i] = id.String()
 	}
-	return createBatchResponse{BatchID: b.ID.String(), Count: len(ns), NotificationIDs: ids}
+	return createBatchResponse{
+		BatchID:         res.Batch.ID.String(),
+		Count:           res.Batch.TotalCount,
+		NotificationIDs: ids,
+		Duplicates:      res.Duplicates,
+	}
 }
 
 type batchResponse struct {

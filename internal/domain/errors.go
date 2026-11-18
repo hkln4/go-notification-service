@@ -11,7 +11,25 @@ var (
 	// ErrInvalidState means the requested transition is not allowed from the
 	// current status, e.g. cancelling a notification that is processing.
 	ErrInvalidState = errors.New("invalid state")
+	// ErrDuplicateKey means an insert lost a race on an idempotency key that
+	// another transaction committed first. Callers re-read and compare.
+	ErrDuplicateKey = errors.New("duplicate idempotency key")
+	// ErrIdempotencyMismatch means an idempotency key was reused with a
+	// different request body.
+	ErrIdempotencyMismatch = errors.New("idempotency key reused with a different request")
 )
+
+// IdempotencyConflictError lists the batch items whose key already exists
+// with a different request hash. It unwraps to ErrIdempotencyMismatch.
+type IdempotencyConflictError struct {
+	Fields []FieldError
+}
+
+func (e *IdempotencyConflictError) Error() string {
+	return ErrIdempotencyMismatch.Error()
+}
+
+func (e *IdempotencyConflictError) Unwrap() error { return ErrIdempotencyMismatch }
 
 // FieldError describes one invalid field. Index is set for batch items.
 type FieldError struct {

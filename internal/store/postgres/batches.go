@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 )
@@ -43,4 +44,29 @@ func (s *Store) GetBatch(ctx context.Context, id uuid.UUID) (domain.Batch, map[d
 		return domain.Batch{}, nil, fmt.Errorf("count batch statuses: %w", err)
 	}
 	return b, counts, nil
+}
+
+// FindBatchByIdempotencyKey returns the batch holding key and the IDs of its
+// notifications.
+func (s *Store) FindBatchByIdempotencyKey(ctx context.Context, key string) (domain.Batch, []uuid.UUID, error) {
+	var b domain.Batch
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, idempotency_key, request_hash, total_count, created_at FROM batches WHERE idempotency_key = $1`, key,
+	).Scan(&b.ID, &b.IdempotencyKey, &b.RequestHash, &b.TotalCount, &b.CreatedAt)
+	if isNoRows(err) {
+		return domain.Batch{}, nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Batch{}, nil, fmt.Errorf("find batch by idempotency key: %w", err)
+	}
+	// UUIDv7 IDs are generated in request order, so sorting by id restores it.
+	rows, err := s.pool.Query(ctx, `SELECT id FROM notifications WHERE batch_id = $1 ORDER BY id`, b.ID)
+	if err != nil {
+		return domain.Batch{}, nil, fmt.Errorf("list batch notification ids: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return domain.Batch{}, nil, fmt.Errorf("list batch notification ids: %w", err)
+	}
+	return b, ids, nil
 }

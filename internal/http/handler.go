@@ -18,10 +18,10 @@ import (
 
 // NotificationService is what the handlers need from the service layer.
 type NotificationService interface {
-	Create(ctx context.Context, req service.CreateRequest) (domain.Notification, error)
+	Create(ctx context.Context, req service.CreateRequest) (service.CreateResult, error)
 	Get(ctx context.Context, id uuid.UUID) (service.NotificationDetail, error)
 	Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error)
-	CreateBatch(ctx context.Context, req service.CreateBatchRequest) (domain.Batch, []domain.Notification, error)
+	CreateBatch(ctx context.Context, req service.CreateBatchRequest) (service.BatchResult, error)
 	GetBatch(ctx context.Context, id uuid.UUID) (service.BatchSummary, error)
 	List(ctx context.Context, q service.ListQuery) (service.Page, error)
 }
@@ -53,31 +53,43 @@ func New(svc NotificationService, log *slog.Logger) http.Handler {
 	return handler
 }
 
+// IdempotencyKeyHeader is optional on both create endpoints.
+const IdempotencyKeyHeader = "Idempotency-Key"
+
 // createNotification godoc
 //
-//	@Summary	Create a notification
-//	@Tags		notifications
-//	@Accept		json
-//	@Produce	json
-//	@Param		body	body		createNotificationRequest	true	"Notification"
-//	@Success	202		{object}	notificationResponse
-//	@Failure	400		{object}	errorBody
-//	@Router		/notifications [post]
+//	@Summary		Create a notification
+//	@Description	With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409.
+//	@Tags			notifications
+//	@Accept			json
+//	@Produce		json
+//	@Param			Idempotency-Key	header		string						false	"Deduplicates retries of this request"
+//	@Param			body			body		createNotificationRequest	true	"Notification"
+//	@Success		202				{object}	notificationResponse		"Created"
+//	@Success		200				{object}	notificationResponse		"Replayed: same key and same request"
+//	@Failure		400				{object}	errorBody
+//	@Failure		409				{object}	errorBody	"Key reused with a different request"
+//	@Router			/notifications [post]
 func (h *Handler) createNotification(w http.ResponseWriter, r *http.Request) {
 	var req createNotificationRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	n, err := h.svc.Create(r.Context(), service.CreateRequest{
-		Input:         req.input(),
-		CorrelationID: observability.CorrelationID(r.Context()),
+	res, err := h.svc.Create(r.Context(), service.CreateRequest{
+		Input:          req.input(),
+		CorrelationID:  observability.CorrelationID(r.Context()),
+		IdempotencyKey: r.Header.Get(IdempotencyKeyHeader),
 	})
 	if err != nil {
 		writeServiceError(r.Context(), w, h.log, err)
 		return
 	}
-	w.Header().Set("Location", "/api/v1/notifications/"+n.ID.String())
-	writeJSON(w, http.StatusAccepted, toNotificationResponse(n))
+	status := http.StatusAccepted
+	if res.Replayed {
+		status = http.StatusOK
+	}
+	w.Header().Set("Location", "/api/v1/notifications/"+res.Notification.ID.String())
+	writeJSON(w, status, toNotificationResponse(res.Notification))
 }
 
 // getNotification godoc
@@ -129,33 +141,41 @@ func (h *Handler) cancelNotification(w http.ResponseWriter, r *http.Request) {
 // createBatch godoc
 //
 //	@Summary		Create up to 1000 notifications at once
-//	@Description	All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction.
+//	@Description	All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409.
 //	@Tags			batches
 //	@Accept			json
 //	@Produce		json
-//	@Param			body	body		createBatchRequest	true	"Batch"
-//	@Success		202		{object}	createBatchResponse
-//	@Failure		400		{object}	errorBody
+//	@Param			Idempotency-Key	header		string				false	"Deduplicates retries of the whole batch"
+//	@Param			body			body		createBatchRequest	true	"Batch"
+//	@Success		202				{object}	createBatchResponse	"Created"
+//	@Success		200				{object}	createBatchResponse	"Replayed: same key and same batch"
+//	@Failure		400				{object}	errorBody
+//	@Failure		409				{object}	errorBody
 //	@Router			/notifications/batch [post]
 func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	var req createBatchRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	items := make([]domain.NotificationInput, len(req.Notifications))
+	items := make([]service.BatchItem, len(req.Notifications))
 	for i, n := range req.Notifications {
-		items[i] = n.input()
+		items[i] = service.BatchItem{Input: n.input(), IdempotencyKey: n.IdempotencyKey}
 	}
-	b, ns, err := h.svc.CreateBatch(r.Context(), service.CreateBatchRequest{
-		Items:         items,
-		CorrelationID: observability.CorrelationID(r.Context()),
+	res, err := h.svc.CreateBatch(r.Context(), service.CreateBatchRequest{
+		Items:          items,
+		CorrelationID:  observability.CorrelationID(r.Context()),
+		IdempotencyKey: r.Header.Get(IdempotencyKeyHeader),
 	})
 	if err != nil {
 		writeServiceError(r.Context(), w, h.log, err)
 		return
 	}
-	w.Header().Set("Location", "/api/v1/batches/"+b.ID.String())
-	writeJSON(w, http.StatusAccepted, toCreateBatchResponse(b, ns))
+	status := http.StatusAccepted
+	if res.Replayed {
+		status = http.StatusOK
+	}
+	w.Header().Set("Location", "/api/v1/batches/"+res.Batch.ID.String())
+	writeJSON(w, status, toCreateBatchResponse(res))
 }
 
 // getBatch godoc

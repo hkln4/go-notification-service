@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration lint fmt tidy up down migrate-up migrate-down
+.PHONY: build run test test-integration lint lint-docker fmt tidy up down migrate-up migrate-down
 
 build:
 	go build -o bin/ ./cmd/...
@@ -15,6 +15,10 @@ test-integration:
 
 lint:
 	golangci-lint run ./...
+
+# Same linter version as CI, without installing it locally.
+lint-docker:
+	docker run --rm -v "$$PWD":/src -w /src -v golangci-cache:/root/.cache golangci/golangci-lint:v2.15.0 golangci-lint run ./...
 
 fmt:
 	gofmt -s -w .

@@ -79,7 +79,7 @@ func (r *Reader) Err() error {
 
 // Defaults shared by several binaries.
 const (
-	DefaultDatabaseURL = "postgres://notification:notification@localhost:5432/notification?sslmode=disable"
+	DefaultDatabaseURL = "postgres://notification:notification@localhost:5432/notification?sslmode=disable" //nolint:gosec // local dev default, same as docker-compose
 	DefaultLogLevel    = "info"
 )
 

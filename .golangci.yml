@@ -1,0 +1,42 @@
+version: "2"
+
+run:
+  # Lint integration tests too; they are behind a build tag.
+  build-tags:
+    - integration
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - revive
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G404 # math/rand is fine for the mock provider's failure injection
+    revive:
+      rules:
+        - name: exported
+          disabled: true # internal packages; not every exported name needs a doc comment
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/hkln4/go-notification-service

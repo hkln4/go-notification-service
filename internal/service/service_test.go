@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 )
@@ -185,26 +186,19 @@ func TestCreate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newFakeStore()
 			res, err := newTestService(store).Create(context.Background(), CreateRequest{Input: tt.input, CorrelationID: "c1"})
-			n := res.Notification
 			if tt.wantErr {
 				var verr *domain.ValidationError
-				if !errors.As(err, &verr) {
-					t.Fatalf("want validation error, got %v", err)
-				}
-				if store.inserts != 0 {
-					t.Fatal("invalid request reached the store")
-				}
+				require.ErrorAs(t, err, &verr)
+				require.Zero(t, store.inserts, "invalid request reached the store")
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if n.Status != tt.wantStatus || n.CorrelationID != "c1" || n.ID.Version() != 7 || n.CreatedAt.IsZero() {
-				t.Fatalf("got status=%s corr=%q version=%d", n.Status, n.CorrelationID, n.ID.Version())
-			}
-			if _, ok := store.notifications[n.ID]; !ok {
-				t.Fatal("notification not stored")
-			}
+			require.NoError(t, err)
+			n := res.Notification
+			require.Equal(t, tt.wantStatus, n.Status)
+			require.Equal(t, "c1", n.CorrelationID)
+			require.Equal(t, uuid.Version(7), n.ID.Version())
+			require.False(t, n.CreatedAt.IsZero(), "CreatedAt not filled")
+			require.Contains(t, store.notifications, n.ID)
 		})
 	}
 }
@@ -215,9 +209,7 @@ func TestCreatePropagatesStoreError(t *testing.T) {
 	_, err := newTestService(store).Create(context.Background(), CreateRequest{
 		Input: domain.NotificationInput{Channel: "push", Recipient: "tok", Content: "hi"},
 	})
-	if !errors.Is(err, store.insertErr) {
-		t.Fatalf("got %v", err)
-	}
+	require.ErrorIs(t, err, store.insertErr)
 }
 
 func TestGetAndCancel(t *testing.T) {
@@ -226,20 +218,19 @@ func TestGetAndCancel(t *testing.T) {
 	ctx := context.Background()
 
 	res, err := svc.Create(ctx, CreateRequest{Input: domain.NotificationInput{Channel: "push", Recipient: "tok", Content: "hi"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	n := res.Notification
-	got, err := svc.Get(ctx, n.ID)
-	if err != nil || got.ID != n.ID {
-		t.Fatalf("Get = %+v, %v", got, err)
-	}
-	if c, err := svc.Cancel(ctx, n.ID); err != nil || c.Status != domain.StatusCancelled {
-		t.Fatalf("Cancel = %+v, %v", c, err)
-	}
-	if _, err := svc.Get(ctx, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("Get missing = %v", err)
-	}
+	require.NoError(t, err)
+	id := res.Notification.ID
+
+	got, err := svc.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, id, got.ID)
+
+	cancelled, err := svc.Cancel(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusCancelled, cancelled.Status)
+
+	_, err = svc.Get(ctx, uuid.New())
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestCreateBatch(t *testing.T) {
@@ -253,7 +244,7 @@ func TestCreateBatch(t *testing.T) {
 	tests := []struct {
 		name        string
 		items       []BatchItem
-		wantIndexes []int // indexes reported invalid; nil means accepted
+		wantIndexes []int // indexes reported invalid (-1: batch level); nil means accepted
 	}{
 		{"accepted", []BatchItem{valid, valid, valid}, nil},
 		{"max size accepted", many[:MaxBatchSize], nil},
@@ -269,28 +260,22 @@ func TestCreateBatch(t *testing.T) {
 			res, err := newTestService(store).CreateBatch(context.Background(), CreateBatchRequest{Items: tt.items, CorrelationID: "c"})
 
 			if tt.wantIndexes == nil {
-				if err != nil {
-					t.Fatal(err)
-				}
-				if res.Batch.TotalCount != len(tt.items) || len(res.NotificationIDs) != len(tt.items) || store.inserts != 1 {
-					t.Fatalf("total=%d ids=%d inserts=%d", res.Batch.TotalCount, len(res.NotificationIDs), store.inserts)
-				}
+				require.NoError(t, err)
+				require.Equal(t, len(tt.items), res.Batch.TotalCount)
+				require.Len(t, res.NotificationIDs, len(tt.items))
+				require.Equal(t, 1, store.inserts, "one transaction per batch")
 				for _, id := range res.NotificationIDs {
 					n := store.notifications[id]
-					if n.BatchID == nil || *n.BatchID != res.Batch.ID || n.CorrelationID != "c" {
-						t.Fatalf("notification not linked to batch: %+v", n)
-					}
+					require.NotNil(t, n.BatchID)
+					require.Equal(t, res.Batch.ID, *n.BatchID)
+					require.Equal(t, "c", n.CorrelationID)
 				}
 				return
 			}
 
 			var verr *domain.ValidationError
-			if !errors.As(err, &verr) {
-				t.Fatalf("want validation error, got %v", err)
-			}
-			if store.inserts != 0 {
-				t.Fatal("rejected batch reached the store")
-			}
+			require.ErrorAs(t, err, &verr)
+			require.Zero(t, store.inserts, "rejected batch reached the store")
 			var got []int
 			for _, f := range verr.Fields {
 				if f.Index == nil {
@@ -299,9 +284,7 @@ func TestCreateBatch(t *testing.T) {
 					got = append(got, *f.Index)
 				}
 			}
-			if !slices.Equal(got, tt.wantIndexes) {
-				t.Fatalf("indexes = %v, want %v (%v)", got, tt.wantIndexes, err)
-			}
+			require.Equal(t, tt.wantIndexes, got)
 		})
 	}
 }
@@ -313,19 +296,13 @@ func TestGetBatch(t *testing.T) {
 	in := domain.NotificationInput{Channel: "push", Recipient: "tok", Content: "hi"}
 
 	res, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{{Input: in}, {Input: in}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Cancel(ctx, res.NotificationIDs[0]); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	_, err = svc.Cancel(ctx, res.NotificationIDs[0])
+	require.NoError(t, err)
+
 	got, err := svc.GetBatch(ctx, res.Batch.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.StatusCounts[domain.StatusPending] != 1 || got.StatusCounts[domain.StatusCancelled] != 1 {
-		t.Fatalf("counts = %v", got.StatusCounts)
-	}
+	require.NoError(t, err)
+	require.Equal(t, map[domain.Status]int{domain.StatusPending: 1, domain.StatusCancelled: 1}, got.StatusCounts)
 }
 
 func TestListPaginates(t *testing.T) {
@@ -333,21 +310,17 @@ func TestListPaginates(t *testing.T) {
 	svc := newTestService(store)
 	base := fixedNow.Add(-time.Hour)
 	// 5 rows, two sharing a timestamp to exercise the id tie-break.
-	for i, off := range []int{0, 1, 1, 2, 3} {
+	for _, off := range []int{0, 1, 1, 2, 3} {
 		id := uuid.Must(uuid.NewV7())
-		store.notifications[id] = domain.Notification{ID: id, CreatedAt: base.Add(time.Duration(off) * time.Second), Content: string(rune('a' + i))}
+		store.notifications[id] = domain.Notification{ID: id, CreatedAt: base.Add(time.Duration(off) * time.Second)}
 	}
 
 	var seen []uuid.UUID
 	q := ListQuery{Limit: 2}
 	for pages := 0; ; pages++ {
-		if pages > 5 {
-			t.Fatal("pagination did not terminate")
-		}
+		require.LessOrEqual(t, pages, 5, "pagination did not terminate")
 		p, err := svc.List(context.Background(), q)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		for _, n := range p.Items {
 			seen = append(seen, n.ID)
 		}
@@ -356,13 +329,9 @@ func TestListPaginates(t *testing.T) {
 		}
 		q.Cursor = p.NextCursor
 	}
-	if len(seen) != 5 {
-		t.Fatalf("saw %d rows across pages, want 5", len(seen))
-	}
+	require.Len(t, seen, 5)
 	slices.SortFunc(seen, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
-	if len(slices.Compact(seen)) != 5 {
-		t.Fatal("a row appeared on two pages")
-	}
+	require.Len(t, slices.Compact(seen), 5, "a row appeared on two pages")
 }
 
 func TestListQueryValidation(t *testing.T) {
@@ -389,18 +358,13 @@ func TestListQueryValidation(t *testing.T) {
 			store := newFakeStore()
 			_, err := newTestService(store).List(context.Background(), tt.q)
 			if tt.wantField == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				if store.lastFilter.Limit != tt.wantLimit {
-					t.Fatalf("store limit = %d, want %d (page size + 1)", store.lastFilter.Limit, tt.wantLimit)
-				}
+				require.NoError(t, err)
+				require.Equal(t, tt.wantLimit, store.lastFilter.Limit, "page size + 1")
 				return
 			}
 			var verr *domain.ValidationError
-			if !errors.As(err, &verr) || verr.Fields[0].Field != tt.wantField {
-				t.Fatalf("got %v, want error on %s", err, tt.wantField)
-			}
+			require.ErrorAs(t, err, &verr)
+			require.Equal(t, tt.wantField, verr.Fields[0].Field)
 		})
 	}
 }

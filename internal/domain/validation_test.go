@@ -2,11 +2,11 @@ package domain
 
 import (
 	"encoding/json"
-	"errors"
-	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 var now = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
@@ -66,22 +66,16 @@ func TestNotificationInputValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := tt.in.Validate(now)
 			if tt.wantFields == nil {
-				if err != nil {
-					t.Fatalf("want valid, got %v", err)
-				}
+				require.NoError(t, err)
 				return
 			}
 			var verr *ValidationError
-			if !errors.As(err, &verr) {
-				t.Fatalf("want *ValidationError, got %v", err)
-			}
+			require.ErrorAs(t, err, &verr)
 			var got []string
 			for _, f := range verr.Fields {
 				got = append(got, f.Field)
 			}
-			if !slices.Equal(got, tt.wantFields) {
-				t.Fatalf("invalid fields = %v, want %v (%v)", got, tt.wantFields, err)
-			}
+			require.Equal(t, tt.wantFields, got)
 		})
 	}
 }
@@ -91,15 +85,10 @@ func TestValidateNormalizes(t *testing.T) {
 	at := now.Add(time.Hour).In(ist)
 
 	got, err := NotificationInput{Channel: "sms", Recipient: "+905551234567", Content: "x", ScheduledAt: &at}.Validate(now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Priority != PriorityNormal {
-		t.Errorf("priority = %v, want normal", got.Priority)
-	}
-	if got.ScheduledAt.Location() != time.UTC || !got.ScheduledAt.Equal(at) {
-		t.Errorf("scheduledAt = %v, want %v in UTC", got.ScheduledAt, at)
-	}
+	require.NoError(t, err)
+	require.Equal(t, PriorityNormal, got.Priority)
+	require.Equal(t, time.UTC, got.ScheduledAt.Location())
+	require.True(t, got.ScheduledAt.Equal(at))
 }
 
 // The request hash is computed from this encoding, so it must not depend on
@@ -107,13 +96,9 @@ func TestValidateNormalizes(t *testing.T) {
 func TestNewNotificationJSONIsStable(t *testing.T) {
 	a := NewNotification{Channel: ChannelSMS, Recipient: "+905551234567", Content: "x", Priority: PriorityHigh}
 	b, err := json.Marshal(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"channel":"sms","recipient":"+905551234567","content":"x","priority":"high"}`
-	if string(b) != want {
-		t.Fatalf("got %s, want %s", b, want)
-	}
+	require.NoError(t, err)
+	// Exact string, not JSONEq: key order matters for the hash.
+	require.Equal(t, `{"channel":"sms","recipient":"+905551234567","content":"x","priority":"high"}`, string(b))
 }
 
 func TestParsePriority(t *testing.T) {
@@ -130,9 +115,12 @@ func TestParsePriority(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got, err := ParsePriority(tt.in)
-		if (err != nil) != tt.wantErr || got != tt.want {
-			t.Errorf("ParsePriority(%q) = %v, %v; want %v, err=%v", tt.in, got, err, tt.want, tt.wantErr)
+		if tt.wantErr {
+			require.Error(t, err, tt.in)
+			continue
 		}
+		require.NoError(t, err, tt.in)
+		require.Equal(t, tt.want, got, tt.in)
 	}
 }
 
@@ -151,11 +139,7 @@ func TestStatusPredicates(t *testing.T) {
 		{StatusCancelled, true, false},
 	}
 	for _, tt := range tests {
-		if got := tt.s.IsTerminal(); got != tt.terminal {
-			t.Errorf("%s.IsTerminal() = %v", tt.s, got)
-		}
-		if got := tt.s.IsCancellable(); got != tt.cancellable {
-			t.Errorf("%s.IsCancellable() = %v", tt.s, got)
-		}
+		require.Equal(t, tt.terminal, tt.s.IsTerminal(), "%s.IsTerminal()", tt.s)
+		require.Equal(t, tt.cancellable, tt.s.IsCancellable(), "%s.IsCancellable()", tt.s)
 	}
 }

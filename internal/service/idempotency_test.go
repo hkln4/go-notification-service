@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
-	"errors"
-	"slices"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 )
@@ -40,24 +40,21 @@ func TestCreateIdempotency(t *testing.T) {
 			ctx := context.Background()
 
 			first, err := svc.Create(ctx, CreateRequest{Input: tt.first, IdempotencyKey: "k"})
-			if err != nil || first.Replayed {
-				t.Fatalf("first create: %+v, %v", first, err)
-			}
+			require.NoError(t, err)
+			require.False(t, first.Replayed)
+
 			second, err := svc.Create(ctx, CreateRequest{Input: tt.second, IdempotencyKey: tt.key2})
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("err = %v, want %v", err, tt.wantErr)
-			}
-			if err != nil {
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
-			if second.Replayed != tt.wantReplayed {
-				t.Fatalf("replayed = %v, want %v", second.Replayed, tt.wantReplayed)
-			}
-			if tt.wantReplayed && second.Notification.ID != first.Notification.ID {
-				t.Fatal("replay returned a different notification")
-			}
-			if want := map[bool]int{true: 1, false: 2}[tt.wantReplayed]; store.inserts != want {
-				t.Fatalf("inserts = %d, want %d", store.inserts, want)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantReplayed, second.Replayed)
+			if tt.wantReplayed {
+				require.Equal(t, first.Notification.ID, second.Notification.ID)
+				require.Equal(t, 1, store.inserts)
+			} else {
+				require.Equal(t, 2, store.inserts)
 			}
 		})
 	}
@@ -67,21 +64,16 @@ func TestCreateWithoutKeyIsNotDeduplicated(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store)
 	for range 2 {
-		if _, err := svc.Create(context.Background(), CreateRequest{Input: smsInput}); err != nil {
-			t.Fatal(err)
-		}
+		_, err := svc.Create(context.Background(), CreateRequest{Input: smsInput})
+		require.NoError(t, err)
 	}
-	if len(store.notifications) != 2 {
-		t.Fatalf("got %d notifications, want 2", len(store.notifications))
-	}
+	require.Len(t, store.notifications, 2)
 }
 
 func TestCreateRejectsBadKey(t *testing.T) {
 	_, err := newTestService(newFakeStore()).Create(context.Background(), CreateRequest{Input: smsInput, IdempotencyKey: "bad key"})
 	var verr *domain.ValidationError
-	if !errors.As(err, &verr) {
-		t.Fatalf("got %v", err)
-	}
+	require.ErrorAs(t, err, &verr)
 }
 
 // A concurrent request with the same key commits between our read and our
@@ -95,17 +87,13 @@ func TestCreateLosesRaceThenReplays(t *testing.T) {
 	store.beforeInsert = func() {
 		var err error
 		winner, err = svc.Create(ctx, CreateRequest{Input: smsInput, IdempotencyKey: "k"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
 	got, err := svc.Create(ctx, CreateRequest{Input: smsInput, IdempotencyKey: "k"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Replayed || got.Notification.ID != winner.Notification.ID || len(store.notifications) != 1 {
-		t.Fatalf("got %+v, want replay of %s", got, winner.Notification.ID)
-	}
+	require.NoError(t, err)
+	require.True(t, got.Replayed)
+	require.Equal(t, winner.Notification.ID, got.Notification.ID)
+	require.Len(t, store.notifications, 1)
 }
 
 func TestBatchIdempotency(t *testing.T) {
@@ -121,45 +109,40 @@ func TestBatchIdempotency(t *testing.T) {
 		svc := newTestService(store)
 		req := CreateBatchRequest{IdempotencyKey: "b", Items: []BatchItem{item("", "a"), item("", "b")}}
 		first, err := svc.CreateBatch(ctx, req)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		again, err := svc.CreateBatch(ctx, req)
-		if err != nil || !again.Replayed || again.Batch.ID != first.Batch.ID || store.inserts != 1 {
-			t.Fatalf("replay = %+v, %v (inserts %d)", again, err, store.inserts)
-		}
+		require.NoError(t, err)
+		require.True(t, again.Replayed)
+		require.Equal(t, first.Batch.ID, again.Batch.ID)
+		require.Equal(t, 1, store.inserts)
 
 		req.Items[1] = item("", "changed")
-		if _, err := svc.CreateBatch(ctx, req); !errors.Is(err, domain.ErrIdempotencyMismatch) {
-			t.Fatalf("changed batch with same key: %v", err)
-		}
+		_, err = svc.CreateBatch(ctx, req)
+		require.ErrorIs(t, err, domain.ErrIdempotencyMismatch)
 	})
 
 	t.Run("item keys", func(t *testing.T) {
 		store := newFakeStore()
 		svc := newTestService(store)
 		first, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{item("i1", "a"), item("i2", "b")}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// i1 repeated unchanged is skipped; i3 is new.
 		res, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{item("i3", "c"), item("i1", "a")}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !slices.Equal(res.Duplicates, []int{1}) || res.NotificationIDs[1] != first.NotificationIDs[0] || res.Batch.TotalCount != 1 {
-			t.Fatalf("result = %+v", res)
-		}
+		require.NoError(t, err)
+		require.Equal(t, []int{1}, res.Duplicates)
+		require.Equal(t, first.NotificationIDs[0], res.NotificationIDs[1])
+		require.Equal(t, 1, res.Batch.TotalCount)
 
 		// i2 reused with different content fails the whole batch.
 		_, err = svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{item("i4", "d"), item("i2", "changed")}})
 		var conflict *domain.IdempotencyConflictError
-		if !errors.As(err, &conflict) || len(conflict.Fields) != 1 || *conflict.Fields[0].Index != 1 {
-			t.Fatalf("got %v, want conflict on index 1", err)
-		}
-		if found, _ := store.FindByIdempotencyKeys(ctx, []string{"i4"}); len(found) != 0 {
-			t.Fatal("i4 was stored although the batch was rejected")
-		}
+		require.ErrorAs(t, err, &conflict)
+		require.Len(t, conflict.Fields, 1)
+		require.Equal(t, 1, *conflict.Fields[0].Index)
+
+		found, err := store.FindByIdempotencyKeys(ctx, []string{"i4"})
+		require.NoError(t, err)
+		require.Empty(t, found, "i4 was stored although the batch was rejected")
 	})
 }

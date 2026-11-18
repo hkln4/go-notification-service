@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/service"
@@ -100,9 +101,7 @@ func do(t *testing.T, h http.Handler, method, path, body string, headers ...stri
 func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var body errorBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("error body is not JSON: %q", rec.Body.String())
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "error body is not JSON: %q", rec.Body)
 	return body.Error.Code
 }
 
@@ -153,20 +152,12 @@ func TestHandlerStatusCodes(t *testing.T) {
 				headers = []string{"Idempotency-Key", "seen"}
 			}
 			rec := do(t, newTestHandler(tt.svc), tt.method, tt.path, tt.body, headers...)
-			if rec.Code != tt.want {
-				t.Fatalf("status = %d, want %d; body %s", rec.Code, tt.want, rec.Body)
-			}
+			require.Equal(t, tt.want, rec.Code, "body: %s", rec.Body)
 			if tt.wantCode != "" {
-				if got := errorCode(t, rec); got != tt.wantCode {
-					t.Fatalf("error code = %q, want %q", got, tt.wantCode)
-				}
+				require.Equal(t, tt.wantCode, errorCode(t, rec))
 			}
-			if strings.Contains(rec.Body.String(), "hunter2") {
-				t.Fatal("internal error message leaked to client")
-			}
-			if rec.Header().Get("X-Correlation-ID") == "" {
-				t.Fatal("missing X-Correlation-ID on response")
-			}
+			require.NotContains(t, rec.Body.String(), "hunter2", "internal error message leaked to client")
+			require.NotEmpty(t, rec.Header().Get("X-Correlation-ID"))
 		})
 	}
 }
@@ -178,22 +169,16 @@ func TestCreatePassesInputAndCorrelationID(t *testing.T) {
 		`{"channel":"email","recipient":"a@b.co","content":"hi","priority":"low","scheduledAt":"2030-01-02T03:04:05Z"}`,
 		"X-Correlation-ID", "client-corr")
 
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	if got := rec.Header().Get("X-Correlation-ID"); got != "client-corr" {
-		t.Errorf("response correlation = %q", got)
-	}
-	if got := rec.Header().Get("Location"); got != "/api/v1/notifications/"+knownID.String() {
-		t.Errorf("Location = %q", got)
-	}
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Equal(t, "client-corr", rec.Header().Get("X-Correlation-ID"))
+	require.Equal(t, "/api/v1/notifications/"+knownID.String(), rec.Header().Get("Location"))
+
 	in := svc.lastReq.Input
-	if in.Channel != "email" || in.Recipient != "a@b.co" || in.Priority != "low" || !in.ScheduledAt.Equal(at) {
-		t.Errorf("input = %+v", in)
-	}
-	if svc.lastReq.CorrelationID != "client-corr" {
-		t.Errorf("service got correlation %q", svc.lastReq.CorrelationID)
-	}
+	require.Equal(t, "email", in.Channel)
+	require.Equal(t, "a@b.co", in.Recipient)
+	require.Equal(t, "low", in.Priority)
+	require.True(t, in.ScheduledAt.Equal(at))
+	require.Equal(t, "client-corr", svc.lastReq.CorrelationID)
 }
 
 func TestValidationErrorDetails(t *testing.T) {
@@ -207,26 +192,18 @@ func TestValidationErrorDetails(t *testing.T) {
 			Details []domain.FieldError `json:"details"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if len(body.Error.Details) != 2 || body.Error.Details[1].Field != "content" {
-		t.Fatalf("details = %+v", body.Error.Details)
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Error.Details, 2)
+	require.Equal(t, "content", body.Error.Details[1].Field)
 }
 
 func TestGetIncludesDeliveryAttemptsArray(t *testing.T) {
 	rec := do(t, newTestHandler(&fakeService{}), "GET", "/api/v1/notifications/"+knownID.String(), "")
 	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := body["deliveryAttempts"].([]any); !ok {
-		t.Fatalf("deliveryAttempts should be an array even when empty: %s", rec.Body)
-	}
-	if body["id"] != knownID.String() || body["status"] != "sent" {
-		t.Fatalf("embedded fields not flattened: %s", rec.Body)
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.IsType(t, []any{}, body["deliveryAttempts"], "deliveryAttempts should be an array even when empty")
+	require.Equal(t, knownID.String(), body["id"], "embedded fields are flattened")
+	require.Equal(t, "sent", body["status"])
 }
 
 func TestBatchResponses(t *testing.T) {
@@ -236,44 +213,39 @@ func TestBatchResponses(t *testing.T) {
 
 	rec := do(t, h, "POST", "/api/v1/notifications/batch", `{"notifications":[`+item+`,`+item+`]}`, "X-Correlation-ID", "b-1")
 	var created createBatchResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	if created.BatchID != knownID.String() || created.Count != 2 || len(created.NotificationIDs) != 2 {
-		t.Errorf("create response = %+v", created)
-	}
-	if len(svc.lastBatch.Items) != 2 || svc.lastBatch.Items[0].Input.Channel != "push" || svc.lastBatch.CorrelationID != "b-1" {
-		t.Errorf("service got %+v", svc.lastBatch)
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	require.Equal(t, knownID.String(), created.BatchID)
+	require.Equal(t, 2, created.Count)
+	require.Len(t, created.NotificationIDs, 2)
+	require.Len(t, svc.lastBatch.Items, 2)
+	require.Equal(t, "push", svc.lastBatch.Items[0].Input.Channel)
+	require.Equal(t, "b-1", svc.lastBatch.CorrelationID)
 
 	rec = do(t, h, "GET", "/api/v1/batches/"+knownID.String(), "")
 	var got batchResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.StatusCounts) != len(domain.Statuses) || got.StatusCounts["sent"] != 2 || got.StatusCounts["pending"] != 0 {
-		t.Errorf("statusCounts = %v; want every status present", got.StatusCounts)
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.StatusCounts, len(domain.Statuses), "every status is present")
+	require.Equal(t, 2, got.StatusCounts["sent"])
+	require.Contains(t, got.StatusCounts, "pending")
+	require.Zero(t, got.StatusCounts["pending"])
 }
 
 func TestListParsesQuery(t *testing.T) {
 	svc := &fakeService{}
 	rec := do(t, newTestHandler(svc), "GET",
 		"/api/v1/notifications?status=failed&channel=email&from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00%2B03:00&cursor=abc&limit=5", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
-	}
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	q := svc.lastList
-	if q.Status != "failed" || q.Channel != "email" || q.Cursor != "abc" || q.Limit != 5 {
-		t.Errorf("query = %+v", q)
-	}
-	if !q.From.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) || !q.To.Equal(time.Date(2026, 11, 1, 21, 0, 0, 0, time.UTC)) {
-		t.Errorf("from/to = %v / %v", q.From, q.To)
-	}
+	require.Equal(t, service.ListQuery{
+		Status: "failed", Channel: "email", Cursor: "abc", Limit: 5, From: q.From, To: q.To,
+	}, q)
+	require.True(t, q.From.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)))
+	require.True(t, q.To.Equal(time.Date(2026, 11, 1, 21, 0, 0, 0, time.UTC)), "offset is honoured")
+
 	var body listResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Items) != 1 || body.NextCursor != "next" {
-		t.Errorf("body = %s (%v)", rec.Body, err)
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Items, 1)
+	require.Equal(t, "next", body.NextCursor)
 }
 
 func TestIdempotencyKeysReachService(t *testing.T) {
@@ -281,20 +253,15 @@ func TestIdempotencyKeysReachService(t *testing.T) {
 	h := newTestHandler(svc)
 
 	do(t, h, "POST", "/api/v1/notifications", `{"channel":"push","recipient":"t","content":"c"}`, "Idempotency-Key", "k-1")
-	if svc.lastReq.IdempotencyKey != "k-1" {
-		t.Errorf("create key = %q", svc.lastReq.IdempotencyKey)
-	}
+	require.Equal(t, "k-1", svc.lastReq.IdempotencyKey)
 
 	do(t, h, "POST", "/api/v1/notifications/batch",
 		`{"notifications":[{"channel":"push","recipient":"t","content":"c","idempotencyKey":"item-1"}]}`,
 		"Idempotency-Key", "batch-1")
-	if svc.lastBatch.IdempotencyKey != "batch-1" || svc.lastBatch.Items[0].IdempotencyKey != "item-1" {
-		t.Errorf("batch keys = %q / %q", svc.lastBatch.IdempotencyKey, svc.lastBatch.Items[0].IdempotencyKey)
-	}
+	require.Equal(t, "batch-1", svc.lastBatch.IdempotencyKey)
+	require.Equal(t, "item-1", svc.lastBatch.Items[0].IdempotencyKey)
 
 	// The single create endpoint takes its key from the header only.
 	rec := do(t, h, "POST", "/api/v1/notifications", `{"channel":"push","recipient":"t","content":"c","idempotencyKey":"x"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("idempotencyKey in a single create body: status %d, want 400", rec.Code)
-	}
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }

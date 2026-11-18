@@ -4,12 +4,14 @@ package service_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/service"
@@ -46,8 +48,8 @@ func TestConcurrentCreateSameKey(t *testing.T) {
 	for range n {
 		wg.Go(func() {
 			res, err := svc.Create(context.Background(), service.CreateRequest{Input: input, IdempotencyKey: "same"})
-			if err != nil {
-				t.Error(err)
+			// assert, not require: FailNow must not be called off the test goroutine.
+			if !assert.NoError(t, err) {
 				return
 			}
 			if res.Replayed {
@@ -60,13 +62,12 @@ func TestConcurrentCreateSameKey(t *testing.T) {
 	wg.Wait()
 
 	var rows, outbox int
-	if err := db.Pool.QueryRow(context.Background(),
-		`SELECT (SELECT count(*) FROM notifications), (SELECT count(*) FROM outbox)`).Scan(&rows, &outbox); err != nil {
-		t.Fatal(err)
-	}
-	if created.Load() != 1 || replayed.Load() != n-1 || rows != 1 || outbox != 1 {
-		t.Fatalf("created=%d replayed=%d rows=%d outbox=%d", created.Load(), replayed.Load(), rows, outbox)
-	}
+	require.NoError(t, db.Pool.QueryRow(context.Background(),
+		`SELECT (SELECT count(*) FROM notifications), (SELECT count(*) FROM outbox)`).Scan(&rows, &outbox))
+	require.EqualValues(t, 1, created.Load())
+	require.EqualValues(t, n-1, replayed.Load())
+	require.Equal(t, 1, rows)
+	require.Equal(t, 1, outbox)
 }
 
 func TestBatchItemConflictWritesNothing(t *testing.T) {
@@ -74,26 +75,20 @@ func TestBatchItemConflictWritesNothing(t *testing.T) {
 	svc := service.New(postgres.New(db.Pool))
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, service.CreateRequest{Input: input, IdempotencyKey: "taken"}); err != nil {
-		t.Fatal(err)
-	}
+	_, err := svc.Create(ctx, service.CreateRequest{Input: input, IdempotencyKey: "taken"})
+	require.NoError(t, err)
 	other := input
 	other.Content = "different"
-	_, err := svc.CreateBatch(ctx, service.CreateBatchRequest{IdempotencyKey: "batch", Items: []service.BatchItem{
+	_, err = svc.CreateBatch(ctx, service.CreateBatchRequest{IdempotencyKey: "batch", Items: []service.BatchItem{
 		{Input: input}, {Input: other, IdempotencyKey: "taken"},
 	}})
-	if !errors.Is(err, domain.ErrIdempotencyMismatch) {
-		t.Fatalf("err = %v", err)
-	}
+	require.ErrorIs(t, err, domain.ErrIdempotencyMismatch)
 
 	var rows, batches int
-	if err := db.Pool.QueryRow(ctx,
-		`SELECT (SELECT count(*) FROM notifications), (SELECT count(*) FROM batches)`).Scan(&rows, &batches); err != nil {
-		t.Fatal(err)
-	}
-	if rows != 1 || batches != 0 {
-		t.Fatalf("rows=%d batches=%d; the rejected batch must not leave anything behind", rows, batches)
-	}
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM notifications), (SELECT count(*) FROM batches)`).Scan(&rows, &batches))
+	require.Equal(t, 1, rows, "the rejected batch must not leave anything behind")
+	require.Zero(t, batches)
 }
 
 func TestBatchReplayReturnsSameIDsInOrder(t *testing.T) {
@@ -107,16 +102,9 @@ func TestBatchReplayReturnsSameIDsInOrder(t *testing.T) {
 	}
 	req := service.CreateBatchRequest{IdempotencyKey: "b1", Items: items}
 	first, err := svc.CreateBatch(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	again, err := svc.CreateBatch(ctx, req)
-	if err != nil || !again.Replayed {
-		t.Fatalf("replay: %+v, %v", again, err)
-	}
-	for i := range first.NotificationIDs {
-		if first.NotificationIDs[i] != again.NotificationIDs[i] {
-			t.Fatalf("id %d differs on replay; UUIDv7 order should match request order", i)
-		}
-	}
+	require.NoError(t, err)
+	require.True(t, again.Replayed)
+	require.Equal(t, first.NotificationIDs, again.NotificationIDs, "UUIDv7 order matches request order")
 }

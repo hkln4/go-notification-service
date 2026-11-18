@@ -4,7 +4,6 @@ package postgres_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/store/postgres"
@@ -55,30 +55,36 @@ func newNotification(mod func(*domain.Notification)) domain.Notification {
 	return n
 }
 
+func insert(t *testing.T, s *postgres.Store, ns ...domain.Notification) {
+	t.Helper()
+	require.NoError(t, s.InsertNotifications(context.Background(), nil, ns))
+}
+
+func count(t *testing.T, query string, args ...any) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.Pool.QueryRow(context.Background(), query, args...).Scan(&n))
+	return n
+}
+
 func TestInsertAndGet(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 
 	ns := []domain.Notification{newNotification(nil)}
-	if err := s.InsertNotifications(ctx, nil, ns); err != nil {
-		t.Fatal(err)
-	}
-	if ns[0].CreatedAt.IsZero() {
-		t.Fatal("CreatedAt was not filled from RETURNING")
-	}
+	require.NoError(t, s.InsertNotifications(ctx, nil, ns))
+	require.False(t, ns[0].CreatedAt.IsZero(), "CreatedAt is filled from RETURNING")
 
 	got, err := s.GetNotification(ctx, ns[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Channel != domain.ChannelSMS || got.Priority != domain.PriorityHigh ||
-		got.Status != domain.StatusPending || got.CorrelationID != "corr-1" || got.BatchID != nil {
-		t.Fatalf("unexpected notification: %+v", got)
-	}
+	require.NoError(t, err)
+	require.Equal(t, domain.ChannelSMS, got.Channel)
+	require.Equal(t, domain.PriorityHigh, got.Priority)
+	require.Equal(t, domain.StatusPending, got.Status)
+	require.Equal(t, "corr-1", got.CorrelationID)
+	require.Nil(t, got.BatchID)
 
-	if _, err := s.GetNotification(ctx, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("missing id: got %v, want ErrNotFound", err)
-	}
+	_, err = s.GetNotification(ctx, uuid.New())
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestInsertWritesOutboxInSameTransaction(t *testing.T) {
@@ -94,55 +100,60 @@ func TestInsertWritesOutboxInSameTransaction(t *testing.T) {
 		n.Status = domain.StatusScheduled
 		n.ScheduledAt = &at
 	})
-	if err := s.InsertNotifications(ctx, nil, []domain.Notification{now, later}); err != nil {
-		t.Fatal(err)
-	}
+	insert(t, s, now, later)
 
 	type outboxRow struct {
 		routingKey  string
 		priority    int16
-		corr        string
+		corr        *string
 		availableAt time.Time
 	}
 	read := func(id uuid.UUID) outboxRow {
 		var r outboxRow
-		err := db.Pool.QueryRow(ctx,
+		require.NoError(t, db.Pool.QueryRow(ctx,
 			`SELECT routing_key, priority, headers->>'x-correlation-id', available_at
 			 FROM outbox WHERE notification_id = $1`, id).
-			Scan(&r.routingKey, &r.priority, &r.corr, &r.availableAt)
-		if err != nil {
-			t.Fatalf("outbox row for %s: %v", id, err)
-		}
+			Scan(&r.routingKey, &r.priority, &r.corr, &r.availableAt))
 		return r
 	}
 
-	if r := read(now.ID); r.routingKey != "sms" || r.priority != 2 || r.corr != "corr-1" ||
-		time.Since(r.availableAt) > time.Minute {
-		t.Errorf("immediate outbox row = %+v", r)
-	}
-	if r := read(later.ID); r.routingKey != "email" || r.priority != 0 || !r.availableAt.Equal(at) {
-		t.Errorf("scheduled outbox row = %+v, want available_at %v", r, at)
-	}
+	r := read(now.ID)
+	require.Equal(t, "sms", r.routingKey)
+	require.Equal(t, int16(2), r.priority)
+	require.Equal(t, "corr-1", *r.corr)
+	require.WithinDuration(t, time.Now(), r.availableAt, time.Minute, "immediate rows are available now")
+
+	r = read(later.ID)
+	require.Equal(t, "email", r.routingKey)
+	require.Equal(t, int16(0), r.priority)
+	require.True(t, r.availableAt.Equal(at), "scheduled rows become available at scheduled_at")
 }
 
 func TestInsertIsAtomic(t *testing.T) {
 	s := newStore(t)
-	ctx := context.Background()
-
 	dup := newNotification(nil)
-	err := s.InsertNotifications(ctx, nil, []domain.Notification{newNotification(nil), dup, dup})
-	if err == nil {
-		t.Fatal("want primary key violation")
-	}
 
-	var n int
-	if err := db.Pool.QueryRow(ctx,
-		`SELECT (SELECT count(*) FROM notifications) + (SELECT count(*) FROM outbox)`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("%d rows survived a failed insert; want 0", n)
-	}
+	err := s.InsertNotifications(context.Background(), nil, []domain.Notification{newNotification(nil), dup, dup})
+	require.Error(t, err, "want primary key violation")
+	require.Zero(t, count(t, `SELECT (SELECT count(*) FROM notifications) + (SELECT count(*) FROM outbox)`),
+		"rows survived a failed insert")
+}
+
+func TestInsertDuplicateKey(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	key, hash := "k", "h"
+	withKey := func(n *domain.Notification) { n.IdempotencyKey, n.RequestHash = &key, &hash }
+
+	insert(t, s, newNotification(withKey))
+	err := s.InsertNotifications(ctx, nil, []domain.Notification{newNotification(nil), newNotification(withKey)})
+	require.ErrorIs(t, err, domain.ErrDuplicateKey)
+	require.Equal(t, 1, count(t, `SELECT count(*) FROM notifications`), "the other item was rolled back")
+
+	found, err := s.FindByIdempotencyKeys(ctx, []string{"k", "missing"})
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	require.Equal(t, "h", *found["k"].RequestHash)
 }
 
 func TestBatchStatusCounts(t *testing.T) {
@@ -154,27 +165,18 @@ func TestBatchStatusCounts(t *testing.T) {
 	for i := range ns {
 		ns[i] = newNotification(func(n *domain.Notification) { n.BatchID = &b.ID })
 	}
-	if err := s.InsertNotifications(ctx, b, ns); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Cancel(ctx, ns[0].ID); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.InsertNotifications(ctx, b, ns))
+	_, err := s.Cancel(ctx, ns[0].ID)
+	require.NoError(t, err)
 
 	got, counts, err := s.GetBatch(ctx, b.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.TotalCount != 3 || got.CreatedAt.IsZero() {
-		t.Errorf("batch = %+v", got)
-	}
-	if counts[domain.StatusPending] != 2 || counts[domain.StatusCancelled] != 1 || len(counts) != 2 {
-		t.Errorf("counts = %v", counts)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 3, got.TotalCount)
+	require.False(t, got.CreatedAt.IsZero())
+	require.Equal(t, map[domain.Status]int{domain.StatusPending: 2, domain.StatusCancelled: 1}, counts)
 
-	if _, _, err := s.GetBatch(ctx, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("missing batch: got %v", err)
-	}
+	_, _, err = s.GetBatch(ctx, uuid.New())
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestCancel(t *testing.T) {
@@ -193,31 +195,23 @@ func TestCancel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.from), func(t *testing.T) {
 			s := newStore(t)
-			ctx := context.Background()
 			n := newNotification(func(n *domain.Notification) { n.Status = tt.from })
-			if err := s.InsertNotifications(ctx, nil, []domain.Notification{n}); err != nil {
-				t.Fatal(err)
-			}
+			insert(t, s, n)
 
-			got, err := s.Cancel(ctx, n.ID)
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("Cancel from %s: err = %v, want %v", tt.from, err, tt.wantErr)
-			}
-			want := domain.StatusCancelled
+			got, err := s.Cancel(context.Background(), n.ID)
 			if tt.wantErr != nil {
-				want = tt.from
+				require.ErrorIs(t, err, tt.wantErr)
+				require.Equal(t, tt.from, got.Status, "status is unchanged")
+				return
 			}
-			if got.Status != want {
-				t.Fatalf("status = %s, want %s", got.Status, want)
-			}
+			require.NoError(t, err)
+			require.Equal(t, domain.StatusCancelled, got.Status)
 		})
 	}
 
 	t.Run("not found", func(t *testing.T) {
-		s := newStore(t)
-		if _, err := s.Cancel(context.Background(), uuid.New()); !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("err = %v, want ErrNotFound", err)
-		}
+		_, err := newStore(t).Cancel(context.Background(), uuid.New())
+		require.ErrorIs(t, err, domain.ErrNotFound)
 	})
 }
 
@@ -225,35 +219,28 @@ func TestCancel(t *testing.T) {
 // exactly one of them perform the transition, and all of them succeed.
 func TestCancelConcurrent(t *testing.T) {
 	s := newStore(t)
-	ctx := context.Background()
 	n := newNotification(nil)
-	if err := s.InsertNotifications(ctx, nil, []domain.Notification{n}); err != nil {
-		t.Fatal(err)
-	}
+	insert(t, s, n)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)
 	for range 20 {
 		wg.Go(func() {
-			_, err := s.Cancel(ctx, n.ID)
+			_, err := s.Cancel(context.Background(), n.ID)
 			errs <- err
 		})
 	}
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
 }
 
 func TestListAttemptsEmpty(t *testing.T) {
-	s := newStore(t)
-	got, err := s.ListAttempts(context.Background(), uuid.New())
-	if err != nil || len(got) != 0 {
-		t.Fatalf("got %v, %v", got, err)
-	}
+	got, err := newStore(t).ListAttempts(context.Background(), uuid.New())
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func TestListNotifications(t *testing.T) {
@@ -261,8 +248,8 @@ func TestListNotifications(t *testing.T) {
 	ctx := context.Background()
 
 	// 30 rows: channels rotate, every third is sent. created_at is set
-	// explicitly so ordering and time filters are deterministic, and some
-	// rows share a timestamp to exercise the id tie-break.
+	// explicitly so ordering and time filters are deterministic, and pairs
+	// of rows share a timestamp to exercise the id tie-break.
 	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	var ns []domain.Notification
 	for i := range 30 {
@@ -273,28 +260,22 @@ func TestListNotifications(t *testing.T) {
 			}
 		}))
 	}
-	if err := s.InsertNotifications(ctx, nil, ns); err != nil {
-		t.Fatal(err)
-	}
+	insert(t, s, ns...)
 	for i, n := range ns {
-		if _, err := db.Pool.Exec(ctx, `UPDATE notifications SET created_at = $2 WHERE id = $1`,
-			n.ID, base.Add(time.Duration(i/2)*time.Minute)); err != nil {
-			t.Fatal(err)
-		}
+		_, err := db.Pool.Exec(ctx, `UPDATE notifications SET created_at = $2 WHERE id = $1`,
+			n.ID, base.Add(time.Duration(i/2)*time.Minute))
+		require.NoError(t, err)
 	}
 
 	sent, sms := domain.StatusSent, domain.ChannelSMS
 	from, to := base.Add(5*time.Minute), base.Add(10*time.Minute)
 
 	// pageAll walks every page and checks ordering across page boundaries.
-	pageAll := func(f domain.ListFilter) []domain.Notification {
-		t.Helper()
+	pageAll := func(t *testing.T, f domain.ListFilter) []domain.Notification {
 		var all []domain.Notification
 		for {
 			page, err := s.ListNotifications(ctx, f)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			all = append(all, page...)
 			if len(page) < f.Limit {
 				break
@@ -304,9 +285,8 @@ func TestListNotifications(t *testing.T) {
 		}
 		for i := 1; i < len(all); i++ {
 			a, b := all[i-1], all[i]
-			if a.CreatedAt.Before(b.CreatedAt) || (a.CreatedAt.Equal(b.CreatedAt) && a.ID.String() < b.ID.String()) {
-				t.Fatalf("rows %d and %d out of order", i-1, i)
-			}
+			inOrder := a.CreatedAt.After(b.CreatedAt) || (a.CreatedAt.Equal(b.CreatedAt) && a.ID.String() > b.ID.String())
+			require.True(t, inOrder, "rows %d and %d out of order", i-1, i)
 		}
 		return all
 	}
@@ -324,18 +304,17 @@ func TestListNotifications(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pageAll(tt.f)
-			if len(got) != tt.want {
-				t.Fatalf("got %d rows, want %d", len(got), tt.want)
-			}
+			got := pageAll(t, tt.f)
+			require.Len(t, got, tt.want)
 			seen := map[uuid.UUID]bool{}
 			for _, n := range got {
-				if seen[n.ID] {
-					t.Fatalf("%s returned twice", n.ID)
-				}
+				require.False(t, seen[n.ID], "%s returned twice", n.ID)
 				seen[n.ID] = true
-				if tt.f.Status != nil && n.Status != *tt.f.Status || tt.f.Channel != nil && n.Channel != *tt.f.Channel {
-					t.Fatalf("row %+v does not match filter", n)
+				if tt.f.Status != nil {
+					require.Equal(t, *tt.f.Status, n.Status)
+				}
+				if tt.f.Channel != nil {
+					require.Equal(t, *tt.f.Channel, n.Channel)
 				}
 			}
 		})

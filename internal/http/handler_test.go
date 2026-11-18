@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -349,4 +350,13 @@ func TestTemplateFieldsReachService(t *testing.T) {
 	var got templateResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, []string{"name", "code"}, got.Variables)
+}
+
+func TestInvalidStateMessageHidesSentinel(t *testing.T) {
+	svc := &fakeService{createErr: fmt.Errorf("cannot cancel a sent notification: %w", domain.ErrInvalidState)}
+	rec := do(t, newTestHandler(svc), "POST", "/api/v1/notifications", `{}`)
+	var body errorBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Equal(t, "cannot cancel a sent notification", body.Error.Message)
 }

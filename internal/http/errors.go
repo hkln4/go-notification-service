@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 )
@@ -64,7 +65,10 @@ func writeServiceError(ctx context.Context, w http.ResponseWriter, log *slog.Log
 	case errors.Is(err, domain.ErrNameTaken):
 		writeError(w, http.StatusConflict, codeNameTaken, "a template with this name already exists", nil)
 	case errors.Is(err, domain.ErrInvalidState):
-		writeError(w, http.StatusConflict, codeInvalidState, err.Error(), nil)
+		// The error wraps the sentinel for errors.Is; clients only need the
+		// explanation in front of it.
+		msg := strings.TrimSuffix(err.Error(), ": "+domain.ErrInvalidState.Error())
+		writeError(w, http.StatusConflict, codeInvalidState, msg, nil)
 	default:
 		log.ErrorContext(ctx, "request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, codeInternal, "internal server error", nil)

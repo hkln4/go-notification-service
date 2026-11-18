@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
+	"github.com/hkln4/go-notification-service/internal/observability"
 	"github.com/hkln4/go-notification-service/internal/service"
 )
 
@@ -106,7 +107,7 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func newTestHandler(svc NotificationService) http.Handler {
-	return New(svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(svc, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Metrics: observability.NewMetrics()})
 }
 
 func TestHandlerStatusCodes(t *testing.T) {
@@ -143,6 +144,9 @@ func TestHandlerStatusCodes(t *testing.T) {
 		{"create replayed", &fakeService{}, "POST", "/api/v1/notifications", validBody, 200, ""},
 		{"create key mismatch", &fakeService{createErr: domain.ErrIdempotencyMismatch}, "POST", "/api/v1/notifications", validBody, 409, codeIdempotency},
 		{"batch item key conflict", &fakeService{createErr: &domain.IdempotencyConflictError{}}, "POST", "/api/v1/notifications/batch", `{"notifications":[]}`, 409, codeIdempotency},
+		{"health", &fakeService{}, "GET", "/health", "", 200, ""},
+		{"ready", &fakeService{}, "GET", "/ready", "", 200, ""},
+		{"metrics", &fakeService{}, "GET", "/metrics", "", 200, ""},
 		{"wrong method", &fakeService{}, "DELETE", "/api/v1/notifications/" + knownID.String(), "", 405, ""},
 	}
 	for _, tt := range tests {
@@ -264,4 +268,16 @@ func TestIdempotencyKeysReachService(t *testing.T) {
 	// The single create endpoint takes its key from the header only.
 	rec := do(t, h, "POST", "/api/v1/notifications", `{"channel":"push","recipient":"t","content":"c","idempotencyKey":"x"}`)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestMetricsUseRoutePattern(t *testing.T) {
+	m := observability.NewMetrics()
+	h := New(&fakeService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Metrics: m})
+	do(t, h, "GET", "/api/v1/notifications/"+knownID.String(), "")
+	do(t, h, "POST", "/api/v1/notifications", `{"channel":"sms","recipient":"+905551234567","content":"x"}`)
+
+	out := do(t, h, "GET", "/metrics", "").Body.String()
+	require.Contains(t, out, `route="GET /api/v1/notifications/{id}"`)
+	require.NotContains(t, out, knownID.String(), "IDs must not become label values")
+	require.Contains(t, out, `notifications_created_total{channel="sms"} 1`)
 }

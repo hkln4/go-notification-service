@@ -27,16 +27,30 @@ type NotificationService interface {
 }
 
 type Handler struct {
-	svc NotificationService
-	log *slog.Logger
+	svc     NotificationService
+	log     *slog.Logger
+	metrics *observability.Metrics
+}
+
+// Options are optional collaborators; the zero value serves only the API.
+type Options struct {
+	Metrics *observability.Metrics
+	// Ready answers /ready; nil means always ready.
+	Ready http.Handler
 }
 
 // New returns the full HTTP handler with middleware applied. Routing uses the
 // standard library mux (method and wildcard patterns since Go 1.22).
-func New(svc NotificationService, log *slog.Logger) http.Handler {
-	h := &Handler{svc: svc, log: log}
+func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
+	h := &Handler{svc: svc, log: log, metrics: opts.Metrics}
+	if opts.Ready == nil {
+		opts.Ready = observability.ReadyHandler(time.Second)
+	}
 
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", opts.Metrics.Handler())
+	mux.Handle("GET /health", observability.HealthHandler())
+	mux.Handle("GET /ready", opts.Ready)
 	mux.HandleFunc("POST /api/v1/notifications", h.createNotification)
 	mux.HandleFunc("GET /api/v1/notifications", h.listNotifications)
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.getNotification)
@@ -48,7 +62,7 @@ func New(svc NotificationService, log *slog.Logger) http.Handler {
 	var handler http.Handler = mux
 	handler = limitBody(handler)
 	handler = recoverPanics(log, handler)
-	handler = accessLog(log, handler)
+	handler = accessLog(log, opts.Metrics, handler)
 	handler = correlation(handler)
 	return handler
 }
@@ -87,6 +101,8 @@ func (h *Handler) createNotification(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusAccepted
 	if res.Replayed {
 		status = http.StatusOK
+	} else {
+		h.metrics.Created(string(res.Notification.Channel))
 	}
 	w.Header().Set("Location", "/api/v1/notifications/"+res.Notification.ID.String())
 	writeJSON(w, status, toNotificationResponse(res.Notification))
@@ -173,6 +189,16 @@ func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusAccepted
 	if res.Replayed {
 		status = http.StatusOK
+	} else {
+		dup := map[int]bool{}
+		for _, i := range res.Duplicates {
+			dup[i] = true
+		}
+		for i, item := range items {
+			if !dup[i] {
+				h.metrics.Created(item.Input.Channel)
+			}
+		}
 	}
 	w.Header().Set("Location", "/api/v1/batches/"+res.Batch.ID.String())
 	writeJSON(w, status, toCreateBatchResponse(res))

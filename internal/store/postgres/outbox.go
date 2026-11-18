@@ -63,3 +63,13 @@ func (s *Store) DeleteOutbox(ctx context.Context, ids []int64) error {
 	}
 	return nil
 }
+
+// OutboxBacklog counts rows that are due but not yet published. Scheduled
+// rows in the future are not backlog.
+func (s *Store) OutboxBacklog(ctx context.Context) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE available_at <= now()`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("outbox backlog: %w", err)
+	}
+	return n, nil
+}

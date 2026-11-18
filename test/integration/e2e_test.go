@@ -131,7 +131,7 @@ func run(m *testing.M) (int, error) {
 	defer rdb.Close()
 
 	store := postgres.New(db.Pool)
-	api = httptest.NewServer(httpapi.New(service.New(store), log))
+	api = httptest.NewServer(httpapi.New(service.New(store), log, httpapi.Options{}))
 	defer api.Close()
 
 	runCtx, stop := context.WithCancel(ctx)

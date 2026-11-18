@@ -106,7 +106,10 @@ const (
 type API struct {
 	HTTPAddr        string
 	DatabaseURL     string
+	AMQPURL         string
+	RedisAddr       string
 	LogLevel        string
+	RetryDelays     []time.Duration
 	ShutdownTimeout time.Duration
 }
 
@@ -114,7 +117,10 @@ func LoadAPI(r *Reader) (API, error) {
 	c := API{
 		HTTPAddr:        r.String("HTTP_ADDR", ":8080"),
 		DatabaseURL:     r.String("DATABASE_URL", DefaultDatabaseURL),
+		AMQPURL:         r.String("AMQP_URL", DefaultAMQPURL),
+		RedisAddr:       r.String("REDIS_ADDR", "localhost:6379"),
 		LogLevel:        r.String("LOG_LEVEL", DefaultLogLevel),
+		RetryDelays:     r.Durations("RETRY_DELAYS", DefaultRetryDelays),
 		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 	return c, r.Err()
@@ -126,6 +132,7 @@ var DefaultRetryDelays = []time.Duration{5 * time.Second, 30 * time.Second, 2 * 
 type Relay struct {
 	DatabaseURL  string
 	AMQPURL      string
+	MetricsAddr  string
 	LogLevel     string
 	BatchSize    int
 	PollInterval time.Duration
@@ -137,6 +144,7 @@ func LoadRelay(r *Reader) (Relay, error) {
 	c := Relay{
 		DatabaseURL:  r.String("DATABASE_URL", DefaultDatabaseURL),
 		AMQPURL:      r.String("AMQP_URL", DefaultAMQPURL),
+		MetricsAddr:  r.String("METRICS_ADDR", ":9100"),
 		LogLevel:     r.String("LOG_LEVEL", DefaultLogLevel),
 		BatchSize:    r.Int("RELAY_BATCH_SIZE", 100),
 		PollInterval: r.Duration("RELAY_POLL_INTERVAL", 200*time.Millisecond),
@@ -152,6 +160,7 @@ type Worker struct {
 	AMQPURL         string
 	RedisAddr       string
 	ProviderURL     string
+	MetricsAddr     string
 	LogLevel        string
 	RatePerSecond   int
 	Prefetch        int
@@ -169,6 +178,7 @@ func LoadWorker(r *Reader) (Worker, error) {
 		AMQPURL:         r.String("AMQP_URL", DefaultAMQPURL),
 		RedisAddr:       r.String("REDIS_ADDR", "localhost:6379"),
 		ProviderURL:     r.String("PROVIDER_URL", "http://localhost:9090/"),
+		MetricsAddr:     r.String("METRICS_ADDR", ":9100"),
 		LogLevel:        r.String("LOG_LEVEL", DefaultLogLevel),
 		RatePerSecond:   r.Int("RATE_LIMIT_PER_SECOND", 100),
 		Prefetch:        r.Int("WORKER_PREFETCH", 10),

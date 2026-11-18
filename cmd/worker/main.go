@@ -5,10 +5,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -51,12 +54,29 @@ func run() error {
 	mq := broker.New(cfg.AMQPURL, broker.NewTopology(cfg.RetryDelays), log)
 	defer mq.Close()
 
+	metrics := observability.NewMetrics()
+	ops := observability.OpsServer(cfg.MetricsAddr, metrics, observability.ReadyHandler(2*time.Second,
+		observability.Check{Name: "postgres", Ping: pool.Ping},
+		observability.Check{Name: "rabbitmq", Ping: func(context.Context) error {
+			if !mq.Connected() {
+				return broker.ErrNotConnected
+			}
+			return nil
+		}},
+		observability.Check{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
+	))
+	go serveOps(ops, log)
+	defer func() { _ = ops.Close() }()
+
 	w := worker.New(
 		postgres.New(pool),
 		mq,
 		provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout),
 		ratelimit.NewRedis(rdb, cfg.RatePerSecond),
-		worker.Config{Lease: cfg.Lease, TokenWait: cfg.TokenWait, RetryDelays: cfg.RetryDelays, MaxAttempts: cfg.MaxAttempts},
+		worker.Config{
+			Lease: cfg.Lease, TokenWait: cfg.TokenWait, RetryDelays: cfg.RetryDelays,
+			MaxAttempts: cfg.MaxAttempts, Metrics: metrics,
+		},
 		log,
 	)
 
@@ -64,4 +84,10 @@ func run() error {
 	w.Run(ctx, mq, cfg.Prefetch, cfg.ShutdownTimeout)
 	log.Info("worker stopped")
 	return nil
+}
+
+func serveOps(srv *http.Server, log *slog.Logger) {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("ops server failed", "err", err)
+	}
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/domain"
+	"github.com/hkln4/go-notification-service/internal/observability"
 	"github.com/hkln4/go-notification-service/internal/provider"
 	"github.com/hkln4/go-notification-service/internal/store/postgres"
 )
@@ -51,6 +52,7 @@ type Config struct {
 	TokenWait   time.Duration
 	RetryDelays []time.Duration
 	MaxAttempts int
+	Metrics     *observability.Metrics
 }
 
 type Worker struct {
@@ -197,6 +199,16 @@ func (w *Worker) finish(d amqp.Delivery, n domain.Notification, lease uuid.UUID,
 	applied, err := w.store.CompleteAttempt(ctx, o)
 	if err != nil {
 		return err
+	}
+	// Counted once the attempt is recorded, so a redelivery after a failed
+	// write doesn't count the same call twice.
+	w.cfg.Metrics.Delivered(string(n.Channel), dec.Action.String(), res.Latency)
+	if applied && dec.Action == ActionSent {
+		start := n.CreatedAt
+		if n.ScheduledAt != nil {
+			start = *n.ScheduledAt
+		}
+		w.cfg.Metrics.EndToEnd(string(n.Channel), time.Since(start))
 	}
 	if !applied {
 		// Our lease expired and another worker took over; its result wins.

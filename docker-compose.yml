@@ -76,11 +76,18 @@ services:
     command: ["/app/api"]
     environment:
       DATABASE_URL: *database-url
+      AMQP_URL: *amqp-url
+      REDIS_ADDR: redis:6379
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
     ports:
       - "8080:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -138,6 +145,15 @@ services:
       LATENCY_MS: ${LATENCY_MS:-50}
     ports:
       - "9090:9090"
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090" # 9090 is the mock provider
+    depends_on:
+      - api
 
 volumes:
   postgres-data:

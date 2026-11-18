@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/config"
@@ -42,6 +45,22 @@ func run() error {
 
 	mq := broker.New(cfg.AMQPURL, broker.NewTopology(cfg.RetryDelays), log)
 	defer mq.Close()
+
+	ops := observability.OpsServer(cfg.MetricsAddr, observability.NewMetrics(), observability.ReadyHandler(2*time.Second,
+		observability.Check{Name: "postgres", Ping: pool.Ping},
+		observability.Check{Name: "rabbitmq", Ping: func(context.Context) error {
+			if !mq.Connected() {
+				return broker.ErrNotConnected
+			}
+			return nil
+		}},
+	))
+	go func() {
+		if err := ops.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("ops server failed", "err", err)
+		}
+	}()
+	defer func() { _ = ops.Close() }()
 
 	log.Info("relay started", "batch_size", cfg.BatchSize, "poll_interval", cfg.PollInterval.String())
 	relay.New(postgres.New(pool), mq, relay.Config{

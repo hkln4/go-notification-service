@@ -1,5 +1,6 @@
 // Command api serves the REST API. It writes notifications and their outbox
-// rows to PostgreSQL and never talks to RabbitMQ directly.
+// rows to PostgreSQL and never publishes to RabbitMQ; it connects to the
+// broker and Redis only to report queue depth and readiness.
 package main
 
 import (
@@ -12,7 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
+	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/config"
+	"github.com/hkln4/go-notification-service/internal/domain"
 	httpapi "github.com/hkln4/go-notification-service/internal/http"
 	"github.com/hkln4/go-notification-service/internal/observability"
 	"github.com/hkln4/go-notification-service/internal/service"
@@ -42,11 +47,30 @@ func run() error {
 		return err
 	}
 	defer pool.Close()
+	store := postgres.New(pool)
 
-	svc := service.New(postgres.New(pool))
+	mq := broker.New(cfg.AMQPURL, broker.NewTopology(cfg.RetryDelays), log)
+	defer mq.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+	defer func() { _ = rdb.Close() }()
+
+	metrics := observability.NewMetrics()
+	go sample(ctx, store, mq, metrics, log)
+
+	ready := observability.ReadyHandler(2*time.Second,
+		observability.Check{Name: "postgres", Ping: store.Ping},
+		observability.Check{Name: "rabbitmq", Ping: func(context.Context) error {
+			if !mq.Connected() {
+				return broker.ErrNotConnected
+			}
+			return nil
+		}},
+		observability.Check{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
+	)
+
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: httpapi.New(svc, log),
+		Handler: httpapi.New(service.New(store), log, httpapi.Options{Metrics: metrics, Ready: ready}),
 		// Bound how long a slow client can hold a connection.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -74,4 +98,35 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// sample refreshes the gauges that come from outside the process: outbox
+// backlog every second and queue depths every five.
+func sample(ctx context.Context, store *postgres.Store, mq *broker.Client, m *observability.Metrics, log *slog.Logger) {
+	queues := []string{broker.QueueDLQ}
+	for _, ch := range domain.Channels {
+		queues = append(queues, broker.WorkQueue(string(ch)))
+	}
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for i := 0; ; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if n, err := store.OutboxBacklog(ctx); err == nil {
+			m.OutboxBacklog(n)
+		} else if ctx.Err() == nil {
+			log.Warn("outbox backlog sample failed", "err", err)
+		}
+		if i%5 != 0 {
+			continue
+		}
+		for _, q := range queues {
+			if n, err := mq.QueueDepth(q); err == nil {
+				m.QueueDepth(q, n)
+			}
+		}
+	}
 }

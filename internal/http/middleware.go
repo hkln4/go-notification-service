@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"time"
 
 	"github.com/hkln4/go-notification-service/internal/observability"
@@ -38,16 +39,29 @@ func correlation(next http.Handler) http.Handler {
 	})
 }
 
-func accessLog(log *slog.Logger, next http.Handler) http.Handler {
+// accessLog logs every request and records its latency. The metric is
+// labelled with the route pattern (/api/v1/notifications/{id}), not the
+// path, so IDs don't create a time series each.
+func accessLog(log *slog.Logger, m *observability.Metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		elapsed := time.Since(start)
+
+		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		}
+		m.ObserveHTTP(r.Method, route, strconv.Itoa(rec.status), elapsed)
+		if r.URL.Path == "/metrics" || r.URL.Path == "/health" || r.URL.Path == "/ready" {
+			return // scraped every few seconds; not worth a log line
+		}
 		log.InfoContext(r.Context(), "http request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rec.status,
-			"duration_ms", time.Since(start).Milliseconds(),
+			"duration_ms", elapsed.Milliseconds(),
 		)
 	})
 }

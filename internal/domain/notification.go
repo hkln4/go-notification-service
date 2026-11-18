@@ -139,3 +139,11 @@ type Attempt struct {
 	LatencyMS  int
 	CreatedAt  time.Time
 }
+
+type Batch struct {
+	ID             uuid.UUID
+	IdempotencyKey *string
+	RequestHash    *string
+	TotalCount     int
+	CreatedAt      time.Time
+}

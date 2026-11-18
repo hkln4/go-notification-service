@@ -1,4 +1,4 @@
-.PHONY: build run test lint fmt tidy up down migrate-up migrate-down
+.PHONY: build run test test-integration lint fmt tidy up down migrate-up migrate-down
 
 build:
 	go build -o bin/ ./cmd/...
@@ -8,6 +8,10 @@ run:
 
 test:
 	go test -race ./...
+
+# Needs Docker: testcontainers starts Postgres, RabbitMQ and Redis.
+test-integration:
+	go test -race -count=1 -tags=integration ./...
 
 lint:
 	golangci-lint run ./...

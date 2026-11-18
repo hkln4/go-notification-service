@@ -203,8 +203,10 @@ func (w *Worker) finish(d amqp.Delivery, n domain.Notification, lease uuid.UUID,
 		log.Warn("lease lost before recording outcome; result discarded", "status", o.Status)
 		return nil
 	}
+	// recipient is masked by the logger (observability.MaskRecipient).
 	log.Info("delivery attempt finished", "decision", dec.Action.String(), "status", o.Status,
-		"http_status", res.StatusCode, "latency_ms", res.Latency.Milliseconds(), "retry_in", dec.Delay.String())
+		"recipient", n.Recipient, "http_status", res.StatusCode,
+		"latency_ms", res.Latency.Milliseconds(), "retry_in", dec.Delay.String())
 	w.emit(n, o.Status)
 	return nil
 }

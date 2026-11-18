@@ -49,12 +49,24 @@ var (
 type providerLog struct {
 	mu   sync.Mutex
 	reqs []provider.Request
+	// correlation is the X-Correlation-ID seen per content.
+	correlation map[string]string
 }
 
-func (p *providerLog) add(r provider.Request) {
+func (p *providerLog) add(r provider.Request, correlationID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.reqs = append(p.reqs, r)
+	if p.correlation == nil {
+		p.correlation = map[string]string{}
+	}
+	p.correlation[r.Content] = correlationID
+}
+
+func (p *providerLog) correlationOf(content string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.correlation[content]
 }
 
 func (p *providerLog) count(content string) int {
@@ -101,7 +113,7 @@ func run(m *testing.M) (int, error) {
 	prov := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req provider.Request
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		received.add(req)
+		received.add(req, r.Header.Get("X-Correlation-ID"))
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"messageId":"pm-e2e","status":"accepted","timestamp":"2026-11-18T12:00:00Z"}`))
 	}))
@@ -136,7 +148,7 @@ func run(m *testing.M) (int, error) {
 	return code, nil
 }
 
-func call(t *testing.T, method, path string, body any, out any) int {
+func call(t *testing.T, method, path string, body any, out any, headers ...string) int {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -144,6 +156,9 @@ func call(t *testing.T, method, path string, body any, out any) int {
 	}
 	req, err := http.NewRequest(method, api.URL+path, &buf)
 	require.NoError(t, err)
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -258,4 +273,21 @@ func TestCancelledIsNeverSent(t *testing.T) {
 	call(t, http.MethodGet, "/api/v1/notifications/"+created.ID, nil, &n)
 	require.Equal(t, "cancelled", n.Status)
 	require.Zero(t, received.count(content))
+}
+
+// The client's correlation ID survives every async hop: API → notifications
+// row → outbox headers → AMQP message → worker → provider request.
+func TestCorrelationIDReachesProvider(t *testing.T) {
+	content := "e2e " + t.Name()
+	var created struct {
+		ID            string `json:"id"`
+		CorrelationID string `json:"correlationId"`
+	}
+	call(t, http.MethodPost, "/api/v1/notifications", map[string]any{
+		"channel": "sms", "recipient": "+905551234567", "content": content,
+	}, &created, "X-Correlation-ID", "trace-me-123")
+	require.Equal(t, "trace-me-123", created.CorrelationID)
+
+	waitFor(t, created.ID, "sent")
+	require.Equal(t, "trace-me-123", received.correlationOf(content))
 }

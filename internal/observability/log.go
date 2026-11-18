@@ -10,7 +10,8 @@ import (
 )
 
 // NewLogger returns a JSON logger tagged with the service name. Records
-// logged with a context that carries a correlation ID include it.
+// logged with a context that carries a correlation ID include it, and
+// recipient-like attributes are masked (see MaskRecipient).
 func NewLogger(w io.Writer, service, level string) *slog.Logger {
 	var lvl slog.Level
 	switch strings.ToLower(level) {
@@ -23,7 +24,7 @@ func NewLogger(w io.Writer, service, level string) *slog.Logger {
 	default:
 		lvl = slog.LevelInfo
 	}
-	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lvl})
+	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lvl, ReplaceAttr: maskPII})
 	return slog.New(contextHandler{h}).With("service", service)
 }
 

@@ -15,10 +15,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
@@ -34,6 +36,7 @@ import (
 	"github.com/hkln4/go-notification-service/internal/testutil/pgtest"
 	"github.com/hkln4/go-notification-service/internal/testutil/rdtest"
 	"github.com/hkln4/go-notification-service/internal/worker"
+	"github.com/hkln4/go-notification-service/internal/ws"
 )
 
 var (
@@ -131,11 +134,16 @@ func run(m *testing.M) (int, error) {
 	defer rdb.Close()
 
 	store := postgres.New(db.Pool)
-	api = httptest.NewServer(httpapi.New(service.New(store), log, httpapi.Options{}))
-	defer api.Close()
-
 	runCtx, stop := context.WithCancel(ctx)
 	var wg sync.WaitGroup
+
+	hub := ws.NewHub()
+	forward := hub.Forward(log)
+	wg.Go(func() { mqc.Subscribe(runCtx, broker.ExchangeEvents, func(d broker.Delivery) { forward(d.Body) }) })
+	api = httptest.NewServer(httpapi.New(service.New(store), log, httpapi.Options{
+		WebSocket: ws.NewHandler(hub, store.GetNotification, nil, log),
+	}))
+	defer api.Close()
 	r := relay.New(store, mqc, relay.Config{BatchSize: 100, PollInterval: 20 * time.Millisecond, Lease: 10 * time.Second}, log)
 	wg.Go(func() { r.Run(runCtx) })
 	w := worker.New(store, mqc, provider.NewClient(prov.URL, 2*time.Second), ratelimit.NewRedis(rdb, 100),
@@ -290,4 +298,52 @@ func TestCorrelationIDReachesProvider(t *testing.T) {
 
 	waitFor(t, created.ID, "sent")
 	require.Equal(t, "trace-me-123", received.correlationOf(content))
+}
+
+// A client watching a batch over WebSocket sees each notification go
+// processing → sent, pushed from the workers through the events exchange.
+func TestWebSocketStreamsBatchStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Schedule slightly ahead so the socket is open before anything is sent.
+	at := time.Now().Add(700 * time.Millisecond).UTC()
+	var created struct {
+		BatchID         string   `json:"batchId"`
+		NotificationIDs []string `json:"notificationIds"`
+	}
+	items := []map[string]any{
+		{"channel": "sms", "recipient": "+905551234567", "content": "ws", "scheduledAt": at},
+		{"channel": "push", "recipient": "tok", "content": "ws", "scheduledAt": at},
+	}
+	require.Equal(t, http.StatusAccepted, call(t, http.MethodPost, "/api/v1/notifications/batch",
+		map[string]any{"notifications": items}, &created))
+
+	conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(api.URL, "http")+"/api/v1/ws?batchId="+created.BatchID, nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	require.NoError(t, err)
+	defer func() { _ = conn.CloseNow() }()
+
+	sent := map[string]bool{}
+	for len(sent) < 2 {
+		_, b, err := conn.Read(ctx)
+		require.NoError(t, err, "never saw both notifications sent")
+		var e domain.StatusEvent
+		require.NoError(t, json.Unmarshal(b, &e))
+		require.Equal(t, created.BatchID, e.BatchID.String())
+		if e.Status == domain.StatusSent {
+			sent[e.NotificationID.String()] = true
+		}
+	}
+	require.ElementsMatch(t, created.NotificationIDs, keys(sent))
+}
+
+func keys(m map[string]bool) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

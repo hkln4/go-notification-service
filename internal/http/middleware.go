@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"bufio"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -28,6 +30,13 @@ func (r *statusRecorder) WriteHeader(code int) {
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Hijack is needed for the WebSocket upgrade, which checks for
+// http.Hijacker directly instead of going through Unwrap.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	r.status = http.StatusSwitchingProtocols
+	return http.NewResponseController(r.ResponseWriter).Hijack()
+}
 
 // correlation reads X-Correlation-ID (or creates one), echoes it on the
 // response and puts it in the request context for logs and the database.

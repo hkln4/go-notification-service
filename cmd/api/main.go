@@ -31,6 +31,7 @@ import (
 	"github.com/hkln4/go-notification-service/internal/observability"
 	"github.com/hkln4/go-notification-service/internal/service"
 	"github.com/hkln4/go-notification-service/internal/store/postgres"
+	"github.com/hkln4/go-notification-service/internal/ws"
 )
 
 func main() {
@@ -67,6 +68,12 @@ func run() error {
 	var backlog atomic.Int64
 	go sample(ctx, store, mq, metrics, &backlog, log)
 
+	// Live status updates: this instance's private queue on the events
+	// fanout feeds the WebSocket hub.
+	hub := ws.NewHub()
+	forward := hub.Forward(log)
+	go mq.Subscribe(ctx, broker.ExchangeEvents, func(d broker.Delivery) { forward(d.Body) })
+
 	ready := observability.ReadyHandler(2*time.Second,
 		observability.Check{Name: "postgres", Ping: store.Ping},
 		observability.Check{Name: "rabbitmq", Ping: func(context.Context) error {
@@ -88,7 +95,8 @@ func run() error {
 				Limit:      cfg.BackpressureLimit,
 				RetryAfter: 5 * time.Second,
 			},
-			Swagger: httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")),
+			Swagger:   httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")),
+			WebSocket: ws.NewHandler(hub, store.GetNotification, cfg.WSOrigins, log),
 		}),
 		// Bound how long a slow client can hold a connection.
 		ReadHeaderTimeout: 5 * time.Second,

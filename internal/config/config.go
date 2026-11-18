@@ -114,6 +114,8 @@ type API struct {
 	// BackpressureLimit is the outbox backlog above which creates get 429.
 	// 0 disables it.
 	BackpressureLimit int
+	// WSOrigins are the Origin patterns allowed to open a WebSocket.
+	WSOrigins []string
 }
 
 func LoadAPI(r *Reader) (API, error) {
@@ -126,6 +128,8 @@ func LoadAPI(r *Reader) (API, error) {
 		RetryDelays:       r.Durations("RETRY_DELAYS", DefaultRetryDelays),
 		ShutdownTimeout:   r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 		BackpressureLimit: r.Int("BACKPRESSURE_LIMIT", 50_000),
+		// "*" keeps the demo usable from any page; restrict it in production.
+		WSOrigins: strings.Split(r.String("WS_ALLOWED_ORIGINS", "*"), ","),
 	}
 	return c, r.Err()
 }

@@ -99,3 +99,63 @@ func (c *Client) consumeOnce(ctx context.Context, queue string, prefetch int, ha
 		}
 	}
 }
+
+// Subscribe receives every message published to a fanout exchange through a
+// private queue: server-named, exclusive and auto-deleted, so each process
+// gets its own copy of every event and the queue disappears with the
+// connection. Messages are auto-acked; events are best effort. Like Consume
+// it resubscribes after a reconnect and returns when ctx is cancelled.
+func (c *Client) Subscribe(ctx context.Context, exchange string, handle func(Delivery)) {
+	for {
+		if c.WaitReady(ctx) != nil {
+			return
+		}
+		err := c.subscribeOnce(ctx, exchange, handle)
+		if ctx.Err() != nil {
+			return
+		}
+		c.log.Warn("subscription stopped, resubscribing", "exchange", exchange, "err", err)
+		select {
+		case <-time.After(resubscribeDelay):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (c *Client) subscribeOnce(ctx context.Context, exchange string, handle func(Delivery)) error {
+	conn, _ := c.current()
+	if conn == nil {
+		return ErrNotConnected
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("open channel: %w", err)
+	}
+	defer func() { _ = ch.Close() }()
+
+	q, err := ch.QueueDeclare("", false, true, true, false, nil)
+	if err != nil {
+		return fmt.Errorf("declare private queue: %w", err)
+	}
+	if err := ch.QueueBind(q.Name, "", exchange, false, nil); err != nil {
+		return fmt.Errorf("bind private queue: %w", err)
+	}
+	tag := "subscriber-" + uuid.NewString()
+	deliveries, err := ch.Consume(q.Name, tag, true, true, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("consume %s: %w", q.Name, err)
+	}
+	for {
+		select {
+		case d, ok := <-deliveries:
+			if !ok {
+				return fmt.Errorf("delivery channel closed")
+			}
+			handle(d)
+		case <-ctx.Done():
+			_ = ch.Cancel(tag, false)
+			return nil
+		}
+	}
+}

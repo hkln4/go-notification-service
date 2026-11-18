@@ -46,6 +46,8 @@ type Options struct {
 	Backpressure Backpressure
 	// Swagger serves the API docs UI under /swagger/; nil disables it.
 	Swagger http.Handler
+	// WebSocket serves live status updates at /api/v1/ws; nil disables it.
+	WebSocket http.Handler
 }
 
 // New returns the full HTTP handler with middleware applied. Routing uses the
@@ -62,6 +64,10 @@ func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
 	mux.Handle("GET /ready", opts.Ready)
 	if opts.Swagger != nil {
 		mux.Handle("GET /swagger/", opts.Swagger)
+	}
+	if opts.WebSocket != nil {
+		// Documented in the README; swag can't describe a WebSocket.
+		mux.Handle("GET /api/v1/ws", opts.WebSocket)
 	}
 	mux.Handle("POST /api/v1/notifications", opts.Backpressure.wrap(http.HandlerFunc(h.createNotification)))
 	mux.HandleFunc("GET /api/v1/notifications", h.listNotifications)

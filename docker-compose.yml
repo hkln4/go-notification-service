@@ -1,6 +1,14 @@
 # Every value has a default, so `docker-compose up` works without a .env file.
 # Copy .env.example to .env only to override something.
 
+# Shared by every Go service: one image, the binary is picked by `command`.
+x-app: &app
+  build: .
+  image: notification-service:local
+  restart: unless-stopped
+
+x-database-url: &database-url postgres://${POSTGRES_USER:-notification}:${POSTGRES_PASSWORD:-notification}@postgres:5432/${POSTGRES_DB:-notification}?sslmode=disable
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -61,6 +69,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["/app/api"]
+    environment:
+      DATABASE_URL: *database-url
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:

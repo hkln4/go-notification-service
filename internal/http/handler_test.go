@@ -25,6 +25,7 @@ type fakeService struct {
 	createErr error
 	lastReq   service.CreateRequest
 	lastBatch service.CreateBatchRequest
+	lastList  service.ListQuery
 	panicOn   string
 }
 
@@ -73,6 +74,11 @@ func (f *fakeService) GetBatch(_ context.Context, id uuid.UUID) (service.BatchSu
 		Batch:        domain.Batch{ID: id, TotalCount: 3},
 		StatusCounts: map[domain.Status]int{domain.StatusSent: 2, domain.StatusFailed: 1},
 	}, nil
+}
+
+func (f *fakeService) List(_ context.Context, q service.ListQuery) (service.Page, error) {
+	f.lastList = q
+	return service.Page{Items: []domain.Notification{{ID: knownID}}, NextCursor: "next"}, nil
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string, headers ...string) *httptest.ResponseRecorder {
@@ -127,6 +133,9 @@ func TestHandlerStatusCodes(t *testing.T) {
 		{"batch validation", &fakeService{createErr: &domain.ValidationError{}}, "POST", "/api/v1/notifications/batch", `{"notifications":[]}`, 400, codeValidation},
 		{"get batch", &fakeService{}, "GET", "/api/v1/batches/" + knownID.String(), "", 200, ""},
 		{"get batch missing", &fakeService{}, "GET", "/api/v1/batches/" + uuid.NewString(), "", 404, codeNotFound},
+		{"list", &fakeService{}, "GET", "/api/v1/notifications?status=sent&limit=10", "", 200, ""},
+		{"list bad from", &fakeService{}, "GET", "/api/v1/notifications?from=yesterday", "", 400, codeValidation},
+		{"list bad limit", &fakeService{}, "GET", "/api/v1/notifications?limit=ten", "", 400, codeValidation},
 		{"wrong method", &fakeService{}, "DELETE", "/api/v1/notifications/" + knownID.String(), "", 405, ""},
 	}
 	for _, tt := range tests {
@@ -232,5 +241,25 @@ func TestBatchResponses(t *testing.T) {
 	}
 	if len(got.StatusCounts) != len(domain.Statuses) || got.StatusCounts["sent"] != 2 || got.StatusCounts["pending"] != 0 {
 		t.Errorf("statusCounts = %v; want every status present", got.StatusCounts)
+	}
+}
+
+func TestListParsesQuery(t *testing.T) {
+	svc := &fakeService{}
+	rec := do(t, newTestHandler(svc), "GET",
+		"/api/v1/notifications?status=failed&channel=email&from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00%2B03:00&cursor=abc&limit=5", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	q := svc.lastList
+	if q.Status != "failed" || q.Channel != "email" || q.Cursor != "abc" || q.Limit != 5 {
+		t.Errorf("query = %+v", q)
+	}
+	if !q.From.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) || !q.To.Equal(time.Date(2026, 11, 1, 21, 0, 0, 0, time.UTC)) {
+		t.Errorf("from/to = %v / %v", q.From, q.To)
+	}
+	var body listResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Items) != 1 || body.NextCursor != "next" {
+		t.Errorf("body = %s (%v)", rec.Body, err)
 	}
 }

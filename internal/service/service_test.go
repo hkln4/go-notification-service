@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ type fakeStore struct {
 	batches       map[uuid.UUID]domain.Batch
 	inserts       int
 	insertErr     error
+	lastFilter    domain.ListFilter
 }
 
 func newFakeStore() *fakeStore {
@@ -75,6 +77,37 @@ func (f *fakeStore) GetBatch(_ context.Context, id uuid.UUID) (domain.Batch, map
 		}
 	}
 	return b, counts, nil
+}
+
+// ListNotifications only honours Limit and the cursor; filter SQL is covered
+// by the store's integration tests.
+func (f *fakeStore) ListNotifications(_ context.Context, lf domain.ListFilter) ([]domain.Notification, error) {
+	f.lastFilter = lf
+	all := make([]domain.Notification, 0, len(f.notifications))
+	for _, n := range f.notifications {
+		all = append(all, n)
+	}
+	slices.SortFunc(all, func(a, b domain.Notification) int {
+		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(b.ID.String(), a.ID.String())
+	})
+	var out []domain.Notification
+	for _, n := range all {
+		if lf.AfterCreatedAt != nil {
+			after := n.CreatedAt.Before(*lf.AfterCreatedAt) ||
+				(n.CreatedAt.Equal(*lf.AfterCreatedAt) && n.ID.String() < lf.AfterID.String())
+			if !after {
+				continue
+			}
+		}
+		if len(out) == lf.Limit {
+			break
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 var fixedNow = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
@@ -234,5 +267,82 @@ func TestGetBatch(t *testing.T) {
 	}
 	if got.StatusCounts[domain.StatusPending] != 1 || got.StatusCounts[domain.StatusCancelled] != 1 {
 		t.Fatalf("counts = %v", got.StatusCounts)
+	}
+}
+
+func TestListPaginates(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store)
+	base := fixedNow.Add(-time.Hour)
+	// 5 rows, two sharing a timestamp to exercise the id tie-break.
+	for i, off := range []int{0, 1, 1, 2, 3} {
+		id := uuid.Must(uuid.NewV7())
+		store.notifications[id] = domain.Notification{ID: id, CreatedAt: base.Add(time.Duration(off) * time.Second), Content: string(rune('a' + i))}
+	}
+
+	var seen []uuid.UUID
+	q := ListQuery{Limit: 2}
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatal("pagination did not terminate")
+		}
+		p, err := svc.List(context.Background(), q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range p.Items {
+			seen = append(seen, n.ID)
+		}
+		if p.NextCursor == "" {
+			break
+		}
+		q.Cursor = p.NextCursor
+	}
+	if len(seen) != 5 {
+		t.Fatalf("saw %d rows across pages, want 5", len(seen))
+	}
+	slices.SortFunc(seen, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	if len(slices.Compact(seen)) != 5 {
+		t.Fatal("a row appeared on two pages")
+	}
+}
+
+func TestListQueryValidation(t *testing.T) {
+	from := fixedNow
+	before := fixedNow.Add(-time.Hour)
+	tests := []struct {
+		name      string
+		q         ListQuery
+		wantField string
+		wantLimit int
+	}{
+		{"defaults", ListQuery{}, "", DefaultPageSize + 1},
+		{"max limit", ListQuery{Limit: MaxPageSize}, "", MaxPageSize + 1},
+		{"limit too big", ListQuery{Limit: MaxPageSize + 1}, "limit", 0},
+		{"negative limit", ListQuery{Limit: -1}, "limit", 0},
+		{"bad status", ListQuery{Status: "done"}, "status", 0},
+		{"bad channel", ListQuery{Channel: "fax"}, "channel", 0},
+		{"to before from", ListQuery{From: &from, To: &before}, "to", 0},
+		{"garbage cursor", ListQuery{Cursor: "!!!"}, "cursor", 0},
+		{"base64 but not a cursor", ListQuery{Cursor: "e30"}, "cursor", 0}, // {}
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			_, err := newTestService(store).List(context.Background(), tt.q)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if store.lastFilter.Limit != tt.wantLimit {
+					t.Fatalf("store limit = %d, want %d (page size + 1)", store.lastFilter.Limit, tt.wantLimit)
+				}
+				return
+			}
+			var verr *domain.ValidationError
+			if !errors.As(err, &verr) || verr.Fields[0].Field != tt.wantField {
+				t.Fatalf("got %v, want error on %s", err, tt.wantField)
+			}
+		})
 	}
 }

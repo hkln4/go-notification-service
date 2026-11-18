@@ -131,3 +131,16 @@ func toBatchResponse(b service.BatchSummary) batchResponse {
 	}
 	return batchResponse{ID: b.ID.String(), TotalCount: b.TotalCount, StatusCounts: counts, CreatedAt: b.CreatedAt}
 }
+
+type listResponse struct {
+	Items      []notificationResponse `json:"items"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
+}
+
+func toListResponse(p service.Page) listResponse {
+	items := make([]notificationResponse, len(p.Items))
+	for i, n := range p.Items {
+		items[i] = toNotificationResponse(n)
+	}
+	return listResponse{Items: items, NextCursor: p.NextCursor}
+}

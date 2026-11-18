@@ -5,6 +5,9 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -20,6 +23,7 @@ type NotificationService interface {
 	Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	CreateBatch(ctx context.Context, req service.CreateBatchRequest) (domain.Batch, []domain.Notification, error)
 	GetBatch(ctx context.Context, id uuid.UUID) (service.BatchSummary, error)
+	List(ctx context.Context, q service.ListQuery) (service.Page, error)
 }
 
 type Handler struct {
@@ -34,6 +38,7 @@ func New(svc NotificationService, log *slog.Logger) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/notifications", h.createNotification)
+	mux.HandleFunc("GET /api/v1/notifications", h.listNotifications)
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.getNotification)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/cancel", h.cancelNotification)
 	mux.HandleFunc("POST /api/v1/notifications/batch", h.createBatch)
@@ -173,6 +178,66 @@ func (h *Handler) getBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toBatchResponse(b))
+}
+
+// listNotifications godoc
+//
+//	@Summary		List notifications, newest first
+//	@Description	Keyset pagination: pass nextCursor from the previous page as cursor. from is inclusive, to is exclusive.
+//	@Tags			notifications
+//	@Produce		json
+//	@Param			status	query		string	false	"Filter by status"	Enums(pending, scheduled, processing, retrying, sent, failed, cancelled)
+//	@Param			channel	query		string	false	"Filter by channel"	Enums(sms, email, push)
+//	@Param			from	query		string	false	"Created at or after (RFC 3339)"
+//	@Param			to		query		string	false	"Created before (RFC 3339)"
+//	@Param			cursor	query		string	false	"Cursor from the previous page"
+//	@Param			limit	query		int		false	"Page size, 1-200 (default 50)"
+//	@Success		200		{object}	listResponse
+//	@Failure		400		{object}	errorBody
+//	@Router			/notifications [get]
+func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
+	q, ferr := parseListQuery(r.URL.Query())
+	if ferr != nil {
+		writeServiceError(r.Context(), w, h.log, ferr)
+		return
+	}
+	page, err := h.svc.List(r.Context(), q)
+	if err != nil {
+		writeServiceError(r.Context(), w, h.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toListResponse(page))
+}
+
+// parseListQuery only handles syntax (numbers, timestamps); the service
+// validates meaning.
+func parseListQuery(v url.Values) (service.ListQuery, error) {
+	q := service.ListQuery{Status: v.Get("status"), Channel: v.Get("channel"), Cursor: v.Get("cursor")}
+	var verr domain.ValidationError
+	for _, p := range []struct {
+		name string
+		dst  **time.Time
+	}{{"from", &q.From}, {"to", &q.To}} {
+		if s := v.Get(p.name); s != "" {
+			t, err := time.Parse(time.RFC3339, s)
+			if err != nil {
+				verr.Fields = append(verr.Fields, domain.FieldError{Field: p.name, Message: "must be an RFC 3339 timestamp"})
+				continue
+			}
+			*p.dst = &t
+		}
+	}
+	if s := v.Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			verr.Fields = append(verr.Fields, domain.FieldError{Field: "limit", Message: "must be an integer"})
+		}
+		q.Limit = n
+	}
+	if len(verr.Fields) > 0 {
+		return service.ListQuery{}, &verr
+	}
+	return q, nil
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

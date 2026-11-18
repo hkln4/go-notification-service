@@ -147,3 +147,17 @@ type Batch struct {
 	TotalCount     int
 	CreatedAt      time.Time
 }
+
+// ListFilter selects notifications newest first. Nil fields are not
+// filtered on. From is inclusive, To is exclusive.
+type ListFilter struct {
+	Status  *Status
+	Channel *Channel
+	From    *time.Time
+	To      *time.Time
+	// After is the keyset cursor: the (created_at, id) of the last row of
+	// the previous page.
+	AfterCreatedAt *time.Time
+	AfterID        uuid.UUID
+	Limit          int
+}

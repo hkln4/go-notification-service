@@ -255,3 +255,89 @@ func TestListAttemptsEmpty(t *testing.T) {
 		t.Fatalf("got %v, %v", got, err)
 	}
 }
+
+func TestListNotifications(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	// 30 rows: channels rotate, every third is sent. created_at is set
+	// explicitly so ordering and time filters are deterministic, and some
+	// rows share a timestamp to exercise the id tie-break.
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	var ns []domain.Notification
+	for i := range 30 {
+		ns = append(ns, newNotification(func(n *domain.Notification) {
+			n.Channel = domain.Channels[i%3]
+			if i%3 == 0 {
+				n.Status = domain.StatusSent
+			}
+		}))
+	}
+	if err := s.InsertNotifications(ctx, nil, ns); err != nil {
+		t.Fatal(err)
+	}
+	for i, n := range ns {
+		if _, err := db.Pool.Exec(ctx, `UPDATE notifications SET created_at = $2 WHERE id = $1`,
+			n.ID, base.Add(time.Duration(i/2)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sent, sms := domain.StatusSent, domain.ChannelSMS
+	from, to := base.Add(5*time.Minute), base.Add(10*time.Minute)
+
+	// pageAll walks every page and checks ordering across page boundaries.
+	pageAll := func(f domain.ListFilter) []domain.Notification {
+		t.Helper()
+		var all []domain.Notification
+		for {
+			page, err := s.ListNotifications(ctx, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all = append(all, page...)
+			if len(page) < f.Limit {
+				break
+			}
+			last := page[len(page)-1]
+			f.AfterCreatedAt, f.AfterID = &last.CreatedAt, last.ID
+		}
+		for i := 1; i < len(all); i++ {
+			a, b := all[i-1], all[i]
+			if a.CreatedAt.Before(b.CreatedAt) || (a.CreatedAt.Equal(b.CreatedAt) && a.ID.String() < b.ID.String()) {
+				t.Fatalf("rows %d and %d out of order", i-1, i)
+			}
+		}
+		return all
+	}
+
+	tests := []struct {
+		name string
+		f    domain.ListFilter
+		want int
+	}{
+		{"all", domain.ListFilter{Limit: 7}, 30},
+		{"status", domain.ListFilter{Status: &sent, Limit: 4}, 10},
+		{"channel", domain.ListFilter{Channel: &sms, Limit: 4}, 10},
+		{"status and channel", domain.ListFilter{Status: &sent, Channel: &sms, Limit: 3}, 10},
+		{"time range, to exclusive", domain.ListFilter{From: &from, To: &to, Limit: 3}, 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pageAll(tt.f)
+			if len(got) != tt.want {
+				t.Fatalf("got %d rows, want %d", len(got), tt.want)
+			}
+			seen := map[uuid.UUID]bool{}
+			for _, n := range got {
+				if seen[n.ID] {
+					t.Fatalf("%s returned twice", n.ID)
+				}
+				seen[n.ID] = true
+				if tt.f.Status != nil && n.Status != *tt.f.Status || tt.f.Channel != nil && n.Channel != *tt.f.Channel {
+					t.Fatalf("row %+v does not match filter", n)
+				}
+			}
+		})
+	}
+}

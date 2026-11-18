@@ -101,5 +101,16 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Stands in for webhook.site, which stops answering after ~100 free
+  # requests. Point PROVIDER_URL at webhook.site in .env to use it instead.
+  mockprovider:
+    <<: *app
+    command: ["/app/mockprovider"]
+    environment:
+      FAILURE_RATE: ${FAILURE_RATE:-0}
+      LATENCY_MS: ${LATENCY_MS:-50}
+    ports:
+      - "9090:9090"
+
 volumes:
   postgres-data:

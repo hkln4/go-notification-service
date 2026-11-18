@@ -18,6 +18,8 @@ import (
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hkln4/go-notification-service/internal/breaker"
 	"github.com/hkln4/go-notification-service/internal/broker"
@@ -90,6 +92,17 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 	}
 	log := w.log.With("notification_id", msg.NotificationID, "channel", msg.Channel, "correlation_id", d.CorrelationId)
 
+	// Continue the trace that started at the API request (traceparent came
+	// through the outbox row and the relay into the message headers).
+	ctx, span := observability.Tracer().Start(observability.ExtractAMQP(ctx, d.Headers), "worker.deliver",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("notification.id", msg.NotificationID.String()),
+			attribute.String("notification.channel", string(msg.Channel)),
+			attribute.Bool("messaging.redelivered", d.Redelivered),
+		))
+	defer span.End()
+
 	// Circuit open: the provider is failing for this channel. Park the
 	// message for the cooldown before taking a slot or an attempt.
 	ticket, allowed := w.allow(msg.Channel)
@@ -107,7 +120,9 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 	// free within TokenWait, or Redis is down (fail closed), the message
 	// goes round a short retry queue instead of blocking the consumer.
 	tokenCtx, cancel := context.WithTimeout(ctx, w.cfg.TokenWait)
+	tokenCtx, waitSpan := observability.Tracer().Start(tokenCtx, "ratelimit.wait")
 	_, err := w.limiter.Wait(tokenCtx, string(msg.Channel))
+	waitSpan.End()
 	cancel()
 	if err != nil {
 		log.Warn("no rate limit slot; requeueing without using an attempt", "err", err)
@@ -115,7 +130,7 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	n, lease, ok := w.claim(d, msg, log)
+	n, lease, ok := w.claim(ctx, d, msg, log)
 	if !ok {
 		return // claim settled the delivery
 	}
@@ -125,7 +140,8 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 		To: n.Recipient, Channel: string(n.Channel), Content: n.Content,
 	})
 	ticket.Report(breakerOutcome(res, sendErr))
-	if err := w.finish(d, n, lease, res, sendErr, log); err != nil {
+	if err := w.finish(ctx, d, n, lease, res, sendErr, log); err != nil {
+		span.RecordError(err)
 		// The outcome is not durable. Leave the message for redelivery: the
 		// lease expires and the next claim tries again.
 		log.Error("could not record outcome; returning message to queue", "err", err)
@@ -153,8 +169,10 @@ func breakerOutcome(res provider.Result, err error) breaker.Outcome {
 
 // claim takes the lease. When it can't, it settles the delivery itself and
 // returns ok=false.
-func (w *Worker) claim(d amqp.Delivery, msg domain.DeliveryMessage, log *slog.Logger) (domain.Notification, uuid.UUID, bool) {
-	ctx, cancel := dbContext()
+func (w *Worker) claim(ctx context.Context, d amqp.Delivery, msg domain.DeliveryMessage, log *slog.Logger) (domain.Notification, uuid.UUID, bool) {
+	ctx, span := observability.Tracer().Start(ctx, "store.claim")
+	defer span.End()
+	ctx, cancel := dbContext(ctx)
 	defer cancel()
 	lease := w.newID()
 
@@ -200,8 +218,13 @@ func (w *Worker) claim(d amqp.Delivery, msg domain.DeliveryMessage, log *slog.Lo
 // → database update → ack (by the caller). If we crash after the publish
 // but before the update, the copy in the retry queue finds a processing
 // row whose lease expires and is claimed again: a repeat, never a loss.
-func (w *Worker) finish(d amqp.Delivery, n domain.Notification, lease uuid.UUID, res provider.Result, sendErr error, log *slog.Logger) error {
+func (w *Worker) finish(ctx context.Context, d amqp.Delivery, n domain.Notification, lease uuid.UUID, res provider.Result, sendErr error, log *slog.Logger) error {
 	dec := w.policy.Decide(res.StatusCode, sendErr, n.Attempts, res.RetryAfter)
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("delivery.decision", dec.Action.String()),
+		attribute.Int("delivery.attempt", n.Attempts),
+		attribute.Int("http.response.status_code", res.StatusCode),
+	)
 	o := postgres.Outcome{
 		ID:      n.ID,
 		Lease:   lease,
@@ -226,7 +249,9 @@ func (w *Worker) finish(d amqp.Delivery, n domain.Notification, lease uuid.UUID,
 		}
 	}
 
-	ctx, cancel := dbContext()
+	ctx, span := observability.Tracer().Start(ctx, "store.complete_attempt")
+	defer span.End()
+	ctx, cancel := dbContext(ctx)
 	defer cancel()
 	applied, err := w.store.CompleteAttempt(ctx, o)
 	if err != nil {
@@ -294,11 +319,11 @@ func describe(res provider.Result, sendErr error) string {
 	return fmt.Sprintf("provider returned %d", res.StatusCode)
 }
 
-// dbContext bounds a database call. It is deliberately not derived from the
-// consumer's context: on shutdown we still want to record an outcome for a
-// call that already reached the provider.
-func dbContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 5*time.Second)
+// dbContext bounds a database call. It keeps ctx's values (the trace span)
+// but not its cancellation: on shutdown we still want to record an outcome
+// for a call that already reached the provider.
+func dbContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
 // republish copies the delivery to the retry queue for delay. It returns

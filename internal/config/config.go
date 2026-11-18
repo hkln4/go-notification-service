@@ -96,6 +96,10 @@ func (r *Reader) Err() error {
 	return fmt.Errorf("invalid configuration: %v", r.errs)
 }
 
+// OTLPEndpoint is where spans go (Jaeger's OTLP/HTTP port). Empty disables
+// export; trace context is still propagated.
+func OTLPEndpoint(r *Reader) string { return r.String("OTEL_EXPORTER_OTLP_ENDPOINT", "") }
+
 // Defaults shared by several binaries.
 const (
 	DefaultAMQPURL     = "amqp://notification:notification@localhost:5672/"                                 //nolint:gosec // local dev default, same as docker-compose

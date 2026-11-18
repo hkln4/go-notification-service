@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/observability"
@@ -86,6 +87,9 @@ func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
 	handler = recoverPanics(log, handler)
 	handler = accessLog(log, opts.Metrics, handler)
 	handler = correlation(handler)
+	// Outermost, so every other layer runs inside the request span. Trace
+	// context from an incoming traceparent header is continued.
+	handler = otelhttp.NewHandler(handler, "http.server")
 	return handler
 }
 

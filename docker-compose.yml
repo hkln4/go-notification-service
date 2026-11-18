@@ -9,6 +9,7 @@ x-app: &app
 
 x-database-url: &database-url postgres://${POSTGRES_USER:-notification}:${POSTGRES_PASSWORD:-notification}@postgres:5432/${POSTGRES_DB:-notification}?sslmode=disable
 x-amqp-url: &amqp-url amqp://${RABBITMQ_USER:-notification}:${RABBITMQ_PASSWORD:-notification}@rabbitmq:5672/
+x-otlp: &otlp ${OTEL_EXPORTER_OTLP_ENDPOINT-http://jaeger:4318}
 
 services:
   postgres:
@@ -81,6 +82,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
       BACKPRESSURE_LIMIT: ${BACKPRESSURE_LIMIT:-50000}
+      OTEL_EXPORTER_OTLP_ENDPOINT: *otlp
     ports:
       - "8080:8080"
     depends_on:
@@ -99,6 +101,7 @@ services:
     environment:
       DATABASE_URL: *database-url
       AMQP_URL: *amqp-url
+      OTEL_EXPORTER_OTLP_ENDPOINT: *otlp
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
     depends_on:
@@ -124,6 +127,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
       RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-100}
+      OTEL_EXPORTER_OTLP_ENDPOINT: *otlp
     depends_on:
       postgres:
         condition: service_healthy
@@ -155,6 +159,12 @@ services:
       - "9091:9090" # 9090 is the mock provider
     depends_on:
       - api
+
+  # Traces: UI on http://localhost:16686. Services send OTLP/HTTP to :4318.
+  jaeger:
+    image: jaegertracing/jaeger:2.23.0
+    ports:
+      - "16686:16686"
 
 volumes:
   postgres-data:

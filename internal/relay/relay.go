@@ -13,6 +13,9 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/domain"
@@ -91,12 +94,27 @@ func (r *Relay) Tick(ctx context.Context) (int, error) {
 	}
 
 	msgs := make([]broker.Message, len(rows))
+	spans := make([]trace.Span, len(rows))
 	for i, row := range rows {
+		// Continue the API request's trace: the span's context replaces the
+		// traceparent in the message, so the worker becomes its child.
+		sctx, span := observability.Tracer().Start(observability.ExtractMap(ctx, row.Headers), "relay.publish",
+			trace.WithSpanKind(trace.SpanKindProducer),
+			trace.WithAttributes(attribute.String("notification.id", row.NotificationID.String())))
+		spans[i] = span
 		msgs[i] = toMessage(row)
+		observability.InjectAMQP(sctx, msgs[i].Headers)
 	}
 	errs := r.pub.Publish(ctx, msgs...)
 
 	confirmed := make([]int64, 0, len(rows))
+	for i, err := range errs {
+		if err != nil {
+			spans[i].RecordError(err)
+			spans[i].SetStatus(codes.Error, "publish failed")
+		}
+		spans[i].End()
+	}
 	for i, err := range errs {
 		if err != nil {
 			r.log.Warn("publish failed; retrying after lease",

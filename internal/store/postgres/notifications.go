@@ -86,7 +86,7 @@ func insertNotifications(ctx context.Context, tx pgx.Tx, ns []domain.Notificatio
 		// everything else is available immediately.
 		b.Queue(`INSERT INTO outbox (notification_id, routing_key, priority, headers, available_at)
 			VALUES ($1, $2, $3, $4, COALESCE($5, now()))`,
-			n.ID, string(n.Channel), n.Priority, outboxHeaders(n), n.ScheduledAt)
+			n.ID, string(n.Channel), n.Priority, outboxHeaders(ctx, n), n.ScheduledAt)
 	}
 	if err := tx.SendBatch(ctx, b).Close(); err != nil {
 		return fmt.Errorf("insert notifications: %w", err)
@@ -95,12 +95,14 @@ func insertNotifications(ctx context.Context, tx pgx.Tx, ns []domain.Notificatio
 }
 
 // outboxHeaders become AMQP message headers in the relay, carrying the
-// correlation ID across the async boundary.
-func outboxHeaders(n *domain.Notification) map[string]string {
+// correlation ID and the trace context (traceparent) across the async
+// boundary, so the worker's spans join the API request's trace.
+func outboxHeaders(ctx context.Context, n *domain.Notification) map[string]string {
 	h := map[string]string{}
 	if n.CorrelationID != "" {
 		h[observability.CorrelationHeaderKey] = n.CorrelationID
 	}
+	observability.InjectMap(ctx, h)
 	return h
 }
 
@@ -219,7 +221,7 @@ func (s *Store) Requeue(ctx context.Context, id uuid.UUID) (domain.Notification,
 		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO outbox (notification_id, routing_key, priority, headers) VALUES ($1, $2, $3, $4)`,
-			n.ID, string(n.Channel), n.Priority, outboxHeaders(&n))
+			n.ID, string(n.Channel), n.Priority, outboxHeaders(ctx, &n))
 		if err != nil {
 			return fmt.Errorf("requeue outbox: %w", err)
 		}

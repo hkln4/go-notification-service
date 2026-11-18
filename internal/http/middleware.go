@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/hkln4/go-notification-service/internal/observability"
 )
 
@@ -44,6 +47,7 @@ func correlation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := observability.SanitizeCorrelationID(r.Header.Get(observability.CorrelationHeader))
 		w.Header().Set(observability.CorrelationHeader, id)
+		trace.SpanFromContext(r.Context()).SetAttributes(attribute.String("correlation.id", id))
 		next.ServeHTTP(w, r.WithContext(observability.WithCorrelationID(r.Context(), id)))
 	})
 }
@@ -62,6 +66,8 @@ func accessLog(log *slog.Logger, m *observability.Metrics, next http.Handler) ht
 		if route == "" {
 			route = "unmatched"
 		}
+		// Name the span after the route, not the path: paths carry IDs.
+		trace.SpanFromContext(r.Context()).SetName(route)
 		m.ObserveHTTP(r.Method, route, strconv.Itoa(rec.status), elapsed)
 		if r.URL.Path == "/metrics" || r.URL.Path == "/health" || r.URL.Path == "/ready" {
 			return // scraped every few seconds; not worth a log line

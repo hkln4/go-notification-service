@@ -23,6 +23,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/domain"
@@ -46,6 +50,7 @@ var (
 
 	api      *httptest.Server
 	received = &providerLog{}
+	spans    = tracetest.NewSpanRecorder()
 )
 
 // providerLog records what the fake provider was sent.
@@ -109,6 +114,10 @@ func run(m *testing.M) (int, error) {
 		return 0, err
 	}
 	defer rd.Close(ctx)
+
+	// Record every span in memory to check trace propagation.
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	delays := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond}
@@ -346,4 +355,49 @@ func keys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// One trace covers the whole life of a notification across the async
+// boundaries: the API request, the relay's publish, the worker's delivery
+// and the provider call all share a trace ID, linked parent to child.
+func TestTraceSpansAllHops(t *testing.T) {
+	content := "e2e " + t.Name()
+	var created notification
+	call(t, http.MethodPost, "/api/v1/notifications", map[string]any{
+		"channel": "sms", "recipient": "+905551234567", "content": content,
+	}, &created)
+	waitFor(t, created.ID, "sent")
+
+	byName := map[string]sdktrace.ReadOnlySpan{}
+	require.Eventually(t, func() bool {
+		for _, s := range spans.Ended() {
+			for _, a := range s.Attributes() {
+				if string(a.Key) == "notification.id" && a.Value.AsString() == created.ID {
+					byName[s.Name()] = s
+				}
+			}
+		}
+		return byName["relay.publish"] != nil && byName["worker.deliver"] != nil
+	}, 5*time.Second, 20*time.Millisecond)
+
+	relaySpan, workerSpan := byName["relay.publish"], byName["worker.deliver"]
+	traceID := workerSpan.SpanContext().TraceID()
+	require.Equal(t, traceID, relaySpan.SpanContext().TraceID())
+	require.Equal(t, relaySpan.SpanContext().SpanID(), workerSpan.Parent().SpanID(), "worker span is the relay span's child")
+
+	var apiSpan, providerSpan sdktrace.ReadOnlySpan
+	for _, s := range spans.Ended() {
+		if s.SpanContext().TraceID() != traceID {
+			continue
+		}
+		switch {
+		case s.Name() == "POST /api/v1/notifications":
+			apiSpan = s
+		case s.SpanKind().String() == "client" && s.Parent().SpanID() == workerSpan.SpanContext().SpanID():
+			providerSpan = s
+		}
+	}
+	require.NotNil(t, apiSpan, "API request span is the root of the same trace")
+	require.Equal(t, apiSpan.SpanContext().SpanID(), relaySpan.Parent().SpanID())
+	require.NotNil(t, providerSpan, "provider call is traced under the worker span")
 }

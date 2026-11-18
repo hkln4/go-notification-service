@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/hkln4/go-notification-service/internal/observability"
 )
@@ -58,14 +59,14 @@ type Client struct {
 func NewClient(url string, timeout time.Duration) *Client {
 	return &Client{
 		url: url,
-		http: &http.Client{Transport: &http.Transport{
+		http: &http.Client{Transport: otelhttp.NewTransport(&http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 			// The default of 2 idle connections per host would make most
 			// requests open a new TCP (and TLS) connection at 100 msg/s.
 			MaxIdleConns:        200,
 			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
-		}},
+		})},
 		timeout: timeout,
 		now:     time.Now,
 	}

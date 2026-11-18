@@ -1,4 +1,4 @@
-.PHONY: build run test lint fmt tidy
+.PHONY: build run test lint fmt tidy up down
 
 build:
 	go build -o bin/ ./cmd/...
@@ -17,3 +17,9 @@ fmt:
 
 tidy:
 	go mod tidy
+
+up:
+	docker-compose up -d
+
+down:
+	docker-compose down

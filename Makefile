@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration lint lint-docker fmt tidy up down migrate-up migrate-down
+.PHONY: build run test test-integration lint lint-docker fmt tidy up down migrate-up migrate-down swagger
 
 build:
 	go build -o bin/ ./cmd/...
@@ -37,3 +37,9 @@ migrate-up:
 
 migrate-down:
 	docker-compose run --rm migrate down 1
+
+# Regenerates docs/ from the handler annotations. CI checks it is up to date.
+SWAG_VERSION := v1.16.6
+swagger:
+	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init -g cmd/api/main.go -o docs --parseInternal --outputTypes go,json,yaml
+	gofmt -w docs

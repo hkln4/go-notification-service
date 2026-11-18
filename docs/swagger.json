@@ -1,0 +1,585 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Event-driven notification service for SMS, email and push. Creating a notification stores it with an outbox row and returns 202; delivery happens asynchronously with retries, a per-channel rate limit of 100/s and a dead letter queue.\nEvery response carries X-Correlation-ID (echoed from the request or generated). Errors have the shape {\"error\":{\"code\",\"message\",\"details\"}}.",
+        "title": "Notification Service API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "basePath": "/api/v1",
+    "paths": {
+        "/batches/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "batches"
+                ],
+                "summary": "Get a batch with notification counts per status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Batch ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.batchResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications": {
+            "get": {
+                "description": "Keyset pagination: pass nextCursor from the previous page as cursor. from is inclusive, to is exclusive.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "List notifications, newest first",
+                "parameters": [
+                    {
+                        "enum": [
+                            "pending",
+                            "scheduled",
+                            "processing",
+                            "retrying",
+                            "sent",
+                            "failed",
+                            "cancelled"
+                        ],
+                        "type": "string",
+                        "description": "Filter by status",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "sms",
+                            "email",
+                            "push"
+                        ],
+                        "type": "string",
+                        "description": "Filter by channel",
+                        "name": "channel",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Created at or after (RFC 3339)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Created before (RFC 3339)",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Cursor from the previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size, 1-200 (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.listResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Create a notification",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Deduplicates retries of this request",
+                        "name": "Idempotency-Key",
+                        "in": "header"
+                    },
+                    {
+                        "description": "Notification",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.createNotificationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Replayed: same key and same request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.notificationResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.notificationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "409": {
+                        "description": "Key reused with a different request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/batch": {
+            "post": {
+                "description": "All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "batches"
+                ],
+                "summary": "Create up to 1000 notifications at once",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Deduplicates retries of the whole batch",
+                        "name": "Idempotency-Key",
+                        "in": "header"
+                    },
+                    {
+                        "description": "Batch",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.createBatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Replayed: same key and same batch",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.createBatchResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.createBatchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Get a notification with its delivery attempts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Notification ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.notificationDetailResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/{id}/cancel": {
+            "post": {
+                "description": "Only pending, scheduled or retrying notifications can be cancelled. Cancelling twice succeeds.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Cancel a notification",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Notification ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.notificationResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "httpapi.attemptResponse": {
+            "type": "object",
+            "properties": {
+                "attemptNo": {
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "httpStatus": {
+                    "type": "integer"
+                },
+                "latencyMs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "httpapi.batchItemRequest": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "example": "sms"
+                },
+                "content": {
+                    "type": "string",
+                    "example": "Your order has shipped"
+                },
+                "idempotencyKey": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": [
+                        "high",
+                        "normal",
+                        "low"
+                    ],
+                    "example": "high"
+                },
+                "recipient": {
+                    "type": "string",
+                    "example": "+905551234567"
+                },
+                "scheduledAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.batchResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "statusCounts": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "totalCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "httpapi.createBatchRequest": {
+            "type": "object",
+            "properties": {
+                "notifications": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpapi.batchItemRequest"
+                    }
+                }
+            }
+        },
+        "httpapi.createBatchResponse": {
+            "type": "object",
+            "properties": {
+                "batchId": {
+                    "type": "string"
+                },
+                "count": {
+                    "description": "Count is how many notifications this batch created.",
+                    "type": "integer"
+                },
+                "duplicates": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "notificationIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "httpapi.createNotificationRequest": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "example": "sms"
+                },
+                "content": {
+                    "type": "string",
+                    "example": "Your order has shipped"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": [
+                        "high",
+                        "normal",
+                        "low"
+                    ],
+                    "example": "high"
+                },
+                "recipient": {
+                    "type": "string",
+                    "example": "+905551234567"
+                },
+                "scheduledAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.errorBody": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "$ref": "#/definitions/httpapi.errorDetail"
+                }
+            }
+        },
+        "httpapi.errorDetail": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "details": {},
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.listResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpapi.notificationResponse"
+                    }
+                },
+                "nextCursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.notificationDetailResponse": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "batchId": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "correlationId": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "deliveryAttempts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpapi.attemptResponse"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastError": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "providerMessageId": {
+                    "type": "string"
+                },
+                "recipient": {
+                    "type": "string"
+                },
+                "scheduledAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.notificationResponse": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "batchId": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "correlationId": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastError": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "providerMessageId": {
+                    "type": "string"
+                },
+                "recipient": {
+                    "type": "string"
+                },
+                "scheduledAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

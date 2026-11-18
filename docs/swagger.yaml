@@ -1,0 +1,400 @@
+basePath: /api/v1
+definitions:
+  httpapi.attemptResponse:
+    properties:
+      attemptNo:
+        type: integer
+      createdAt:
+        type: string
+      error:
+        type: string
+      httpStatus:
+        type: integer
+      latencyMs:
+        type: integer
+    type: object
+  httpapi.batchItemRequest:
+    properties:
+      channel:
+        example: sms
+        type: string
+      content:
+        example: Your order has shipped
+        type: string
+      idempotencyKey:
+        type: string
+      priority:
+        enum:
+        - high
+        - normal
+        - low
+        example: high
+        type: string
+      recipient:
+        example: "+905551234567"
+        type: string
+      scheduledAt:
+        type: string
+    type: object
+  httpapi.batchResponse:
+    properties:
+      createdAt:
+        type: string
+      id:
+        type: string
+      statusCounts:
+        additionalProperties:
+          type: integer
+        type: object
+      totalCount:
+        type: integer
+    type: object
+  httpapi.createBatchRequest:
+    properties:
+      notifications:
+        items:
+          $ref: '#/definitions/httpapi.batchItemRequest'
+        type: array
+    type: object
+  httpapi.createBatchResponse:
+    properties:
+      batchId:
+        type: string
+      count:
+        description: Count is how many notifications this batch created.
+        type: integer
+      duplicates:
+        items:
+          type: integer
+        type: array
+      notificationIds:
+        items:
+          type: string
+        type: array
+    type: object
+  httpapi.createNotificationRequest:
+    properties:
+      channel:
+        example: sms
+        type: string
+      content:
+        example: Your order has shipped
+        type: string
+      priority:
+        enum:
+        - high
+        - normal
+        - low
+        example: high
+        type: string
+      recipient:
+        example: "+905551234567"
+        type: string
+      scheduledAt:
+        type: string
+    type: object
+  httpapi.errorBody:
+    properties:
+      error:
+        $ref: '#/definitions/httpapi.errorDetail'
+    type: object
+  httpapi.errorDetail:
+    properties:
+      code:
+        type: string
+      details: {}
+      message:
+        type: string
+    type: object
+  httpapi.listResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/httpapi.notificationResponse'
+        type: array
+      nextCursor:
+        type: string
+    type: object
+  httpapi.notificationDetailResponse:
+    properties:
+      attempts:
+        type: integer
+      batchId:
+        type: string
+      channel:
+        type: string
+      content:
+        type: string
+      correlationId:
+        type: string
+      createdAt:
+        type: string
+      deliveryAttempts:
+        items:
+          $ref: '#/definitions/httpapi.attemptResponse'
+        type: array
+      id:
+        type: string
+      lastError:
+        type: string
+      priority:
+        type: string
+      providerMessageId:
+        type: string
+      recipient:
+        type: string
+      scheduledAt:
+        type: string
+      status:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  httpapi.notificationResponse:
+    properties:
+      attempts:
+        type: integer
+      batchId:
+        type: string
+      channel:
+        type: string
+      content:
+        type: string
+      correlationId:
+        type: string
+      createdAt:
+        type: string
+      id:
+        type: string
+      lastError:
+        type: string
+      priority:
+        type: string
+      providerMessageId:
+        type: string
+      recipient:
+        type: string
+      scheduledAt:
+        type: string
+      status:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: |-
+    Event-driven notification service for SMS, email and push. Creating a notification stores it with an outbox row and returns 202; delivery happens asynchronously with retries, a per-channel rate limit of 100/s and a dead letter queue.
+    Every response carries X-Correlation-ID (echoed from the request or generated). Errors have the shape {"error":{"code","message","details"}}.
+  title: Notification Service API
+  version: "1.0"
+paths:
+  /batches/{id}:
+    get:
+      parameters:
+      - description: Batch ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpapi.batchResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Get a batch with notification counts per status
+      tags:
+      - batches
+  /notifications:
+    get:
+      description: 'Keyset pagination: pass nextCursor from the previous page as cursor.
+        from is inclusive, to is exclusive.'
+      parameters:
+      - description: Filter by status
+        enum:
+        - pending
+        - scheduled
+        - processing
+        - retrying
+        - sent
+        - failed
+        - cancelled
+        in: query
+        name: status
+        type: string
+      - description: Filter by channel
+        enum:
+        - sms
+        - email
+        - push
+        in: query
+        name: channel
+        type: string
+      - description: Created at or after (RFC 3339)
+        in: query
+        name: from
+        type: string
+      - description: Created before (RFC 3339)
+        in: query
+        name: to
+        type: string
+      - description: Cursor from the previous page
+        in: query
+        name: cursor
+        type: string
+      - description: Page size, 1-200 (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpapi.listResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: List notifications, newest first
+      tags:
+      - notifications
+    post:
+      consumes:
+      - application/json
+      description: With an Idempotency-Key, repeating the same request returns the
+        stored notification with 200; reusing the key with a different body returns
+        409.
+      parameters:
+      - description: Deduplicates retries of this request
+        in: header
+        name: Idempotency-Key
+        type: string
+      - description: Notification
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/httpapi.createNotificationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'Replayed: same key and same request'
+          schema:
+            $ref: '#/definitions/httpapi.notificationResponse'
+        "202":
+          description: Created
+          schema:
+            $ref: '#/definitions/httpapi.notificationResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "409":
+          description: Key reused with a different request
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Create a notification
+      tags:
+      - notifications
+  /notifications/{id}:
+    get:
+      parameters:
+      - description: Notification ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpapi.notificationDetailResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Get a notification with its delivery attempts
+      tags:
+      - notifications
+  /notifications/{id}/cancel:
+    post:
+      description: Only pending, scheduled or retrying notifications can be cancelled.
+        Cancelling twice succeeds.
+      parameters:
+      - description: Notification ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpapi.notificationResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Cancel a notification
+      tags:
+      - notifications
+  /notifications/batch:
+    post:
+      consumes:
+      - application/json
+      description: 'All items are validated first; if any is invalid the whole batch
+        is rejected and details lists each bad item by index. Valid batches are stored
+        in one transaction. Items may carry their own idempotencyKey: an item that
+        already exists with the same request is skipped and listed in duplicates;
+        one that exists with a different request fails the batch with 409.'
+      parameters:
+      - description: Deduplicates retries of the whole batch
+        in: header
+        name: Idempotency-Key
+        type: string
+      - description: Batch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/httpapi.createBatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'Replayed: same key and same batch'
+          schema:
+            $ref: '#/definitions/httpapi.createBatchResponse'
+        "202":
+          description: Created
+          schema:
+            $ref: '#/definitions/httpapi.createBatchResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Create up to 1000 notifications at once
+      tags:
+      - batches
+swagger: "2.0"

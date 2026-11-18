@@ -24,6 +24,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
+      - name: OpenAPI spec is up to date
+        run: make swagger && git diff --exit-code docs/
 
   unit:
     runs-on: ubuntu-latest

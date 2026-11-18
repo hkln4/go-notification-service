@@ -1,6 +1,12 @@
 // Command api serves the REST API. It writes notifications and their outbox
 // rows to PostgreSQL and never publishes to RabbitMQ; it connects to the
 // broker and Redis only to report queue depth and readiness.
+//
+//	@title			Notification Service API
+//	@version		1.0
+//	@description	Event-driven notification service for SMS, email and push. Creating a notification stores it with an outbox row and returns 202; delivery happens asynchronously with retries, a per-channel rate limit of 100/s and a dead letter queue.
+//	@description	Every response carries X-Correlation-ID (echoed from the request or generated). Errors have the shape {"error":{"code","message","details"}}.
+//	@BasePath		/api/v1
 package main
 
 import (
@@ -15,7 +21,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
+	_ "github.com/hkln4/go-notification-service/docs" // registers the generated OpenAPI spec
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/config"
 	"github.com/hkln4/go-notification-service/internal/domain"
@@ -80,6 +88,7 @@ func run() error {
 				Limit:      cfg.BackpressureLimit,
 				RetryAfter: 5 * time.Second,
 			},
+			Swagger: httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")),
 		}),
 		// Bound how long a slow client can hold a connection.
 		ReadHeaderTimeout: 5 * time.Second,

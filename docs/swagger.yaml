@@ -35,6 +35,15 @@ definitions:
         type: string
       scheduledAt:
         type: string
+      templateId:
+        description: |-
+          TemplateID renders content from a template; content must then be
+          empty and channel may be omitted.
+        type: string
+      variables:
+        additionalProperties:
+          type: string
+        type: object
     type: object
   httpapi.batchResponse:
     properties:
@@ -92,6 +101,31 @@ definitions:
         type: string
       scheduledAt:
         type: string
+      templateId:
+        description: |-
+          TemplateID renders content from a template; content must then be
+          empty and channel may be omitted.
+        type: string
+      variables:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
+  httpapi.createTemplateRequest:
+    properties:
+      body:
+        example: Hi {{name}}, order {{orderId}} is on its way.
+        type: string
+      channel:
+        enum:
+        - sms
+        - email
+        - push
+        example: sms
+        type: string
+      name:
+        example: order-shipped
+        type: string
     type: object
   httpapi.errorBody:
     properties:
@@ -147,6 +181,8 @@ definitions:
         type: string
       status:
         type: string
+      templateId:
+        type: string
       updatedAt:
         type: string
     type: object
@@ -178,8 +214,34 @@ definitions:
         type: string
       status:
         type: string
+      templateId:
+        type: string
       updatedAt:
         type: string
+    type: object
+  httpapi.templateListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/httpapi.templateResponse'
+        type: array
+    type: object
+  httpapi.templateResponse:
+    properties:
+      body:
+        type: string
+      channel:
+        type: string
+      createdAt:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      variables:
+        items:
+          type: string
+        type: array
     type: object
 info:
   contact: {}
@@ -425,4 +487,68 @@ paths:
       summary: Create up to 1000 notifications at once
       tags:
       - batches
+  /templates:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpapi.templateListResponse'
+      summary: List templates
+      tags:
+      - templates
+    post:
+      consumes:
+      - application/json
+      description: Placeholders are written {{name}} and filled from a notification's
+        variables. Values are inserted verbatim; nothing is evaluated.
+      parameters:
+      - description: Template
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/httpapi.createTemplateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/httpapi.templateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "409":
+          description: Name already taken
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Create a message template
+      tags:
+      - templates
+  /templates/{id}:
+    get:
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpapi.templateResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+      summary: Get a template
+      tags:
+      - templates
 swagger: "2.0"

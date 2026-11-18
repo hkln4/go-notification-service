@@ -127,6 +127,7 @@ type Notification struct {
 	ProviderMessageID *string
 	LastError         *string
 	CorrelationID     string
+	TemplateID        *uuid.UUID
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -160,4 +161,12 @@ type ListFilter struct {
 	AfterCreatedAt *time.Time
 	AfterID        uuid.UUID
 	Limit          int
+}
+
+type Template struct {
+	ID        uuid.UUID
+	Name      string
+	Channel   Channel
+	Body      string
+	CreatedAt time.Time
 }

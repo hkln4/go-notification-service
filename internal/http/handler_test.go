@@ -95,6 +95,24 @@ func (f *fakeService) Retry(_ context.Context, id uuid.UUID) (domain.Notificatio
 	return domain.Notification{ID: id, Status: domain.StatusPending}, nil
 }
 
+func (f *fakeService) CreateTemplate(_ context.Context, in service.TemplateInput) (domain.Template, error) {
+	if in.Name == "taken" {
+		return domain.Template{}, domain.ErrNameTaken
+	}
+	return domain.Template{ID: knownID, Name: in.Name, Channel: domain.Channel(in.Channel), Body: in.Body}, nil
+}
+
+func (f *fakeService) GetTemplate(_ context.Context, id uuid.UUID) (domain.Template, error) {
+	if id != knownID {
+		return domain.Template{}, domain.ErrNotFound
+	}
+	return domain.Template{ID: id, Name: "t", Channel: domain.ChannelSMS, Body: "Hi {{name}} {{code}}"}, nil
+}
+
+func (f *fakeService) ListTemplates(context.Context) ([]domain.Template, error) {
+	return []domain.Template{{ID: knownID, Name: "t", Body: "x"}}, nil
+}
+
 func do(t *testing.T, h http.Handler, method, path, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -153,6 +171,11 @@ func TestHandlerStatusCodes(t *testing.T) {
 		{"batch item key conflict", &fakeService{createErr: &domain.IdempotencyConflictError{}}, "POST", "/api/v1/notifications/batch", `{"notifications":[]}`, 409, codeIdempotency},
 		{"retry", &fakeService{}, "POST", "/api/v1/notifications/" + knownID.String() + "/retry", "", 202, ""},
 		{"retry missing", &fakeService{}, "POST", "/api/v1/notifications/" + uuid.NewString() + "/retry", "", 404, codeNotFound},
+		{"create template", &fakeService{}, "POST", "/api/v1/templates", `{"name":"a","channel":"sms","body":"Hi {{n}}"}`, 201, ""},
+		{"template name taken", &fakeService{}, "POST", "/api/v1/templates", `{"name":"taken","channel":"sms","body":"x"}`, 409, codeNameTaken},
+		{"list templates", &fakeService{}, "GET", "/api/v1/templates", "", 200, ""},
+		{"get template", &fakeService{}, "GET", "/api/v1/templates/" + knownID.String(), "", 200, ""},
+		{"get template missing", &fakeService{}, "GET", "/api/v1/templates/" + uuid.NewString(), "", 404, codeNotFound},
 		{"health", &fakeService{}, "GET", "/health", "", 200, ""},
 		{"ready", &fakeService{}, "GET", "/ready", "", 200, ""},
 		{"metrics", &fakeService{}, "GET", "/metrics", "", 200, ""},
@@ -312,4 +335,18 @@ func TestBackpressure(t *testing.T) {
 	// Reads and cancels keep working while overloaded.
 	require.Equal(t, http.StatusOK, do(t, h, "GET", "/api/v1/notifications/"+knownID.String(), "").Code)
 	require.Equal(t, http.StatusConflict, do(t, h, "POST", "/api/v1/notifications/"+knownID.String()+"/cancel", "").Code)
+}
+
+func TestTemplateFieldsReachService(t *testing.T) {
+	svc := &fakeService{}
+	h := newTestHandler(svc)
+	do(t, h, "POST", "/api/v1/notifications",
+		`{"recipient":"+905551234567","templateId":"`+knownID.String()+`","variables":{"name":"Ayşe"}}`)
+	require.Equal(t, knownID.String(), svc.lastReq.Input.TemplateID)
+	require.Equal(t, map[string]string{"name": "Ayşe"}, svc.lastReq.Input.Variables)
+
+	rec := do(t, h, "GET", "/api/v1/templates/"+knownID.String(), "")
+	var got templateResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, []string{"name", "code"}, got.Variables)
 }

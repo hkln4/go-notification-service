@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -27,6 +29,10 @@ type NotificationInput struct {
 	Content     string
 	Priority    string
 	ScheduledAt *time.Time
+	// TemplateID and Variables are resolved into Content by the service
+	// before Validate runs; Validate itself ignores them.
+	TemplateID string
+	Variables  map[string]string
 }
 
 // NewNotification is a validated request. Its JSON encoding is the input of
@@ -37,6 +43,9 @@ type NewNotification struct {
 	Content     string     `json:"content"`
 	Priority    Priority   `json:"priority"`
 	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
+	// TemplateID is set by the service when Content was rendered from a
+	// template; Validate leaves it alone.
+	TemplateID *uuid.UUID `json:"templateId,omitempty"`
 }
 
 // Validate checks every field and returns all problems at once as a

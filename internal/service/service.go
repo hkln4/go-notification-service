@@ -24,6 +24,9 @@ type Store interface {
 	FindByIdempotencyKeys(ctx context.Context, keys []string) (map[string]domain.Notification, error)
 	FindBatchByIdempotencyKey(ctx context.Context, key string) (domain.Batch, []uuid.UUID, error)
 	Requeue(ctx context.Context, id uuid.UUID) (domain.Notification, error)
+	CreateTemplate(ctx context.Context, t *domain.Template) error
+	GetTemplate(ctx context.Context, id uuid.UUID) (domain.Template, error)
+	ListTemplates(ctx context.Context) ([]domain.Template, error)
 }
 
 type Service struct {
@@ -77,7 +80,7 @@ type CreateResult struct {
 // notification (Replayed); same key and a different request returns
 // domain.ErrIdempotencyMismatch.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (CreateResult, error) {
-	nn, err := req.Input.Validate(s.now())
+	nn, err := s.prepare(ctx, req.Input, templateCache{})
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -130,6 +133,7 @@ func (s *Service) build(nn domain.NewNotification, correlationID string, batchID
 		Status:        status,
 		ScheduledAt:   nn.ScheduledAt,
 		CorrelationID: correlationID,
+		TemplateID:    nn.TemplateID,
 	}
 }
 

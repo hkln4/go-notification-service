@@ -17,6 +17,8 @@ var (
 	// ErrIdempotencyMismatch means an idempotency key was reused with a
 	// different request body.
 	ErrIdempotencyMismatch = errors.New("idempotency key reused with a different request")
+	// ErrNameTaken means a template with that name already exists.
+	ErrNameTaken = errors.New("name already taken")
 )
 
 // IdempotencyConflictError lists the batch items whose key already exists

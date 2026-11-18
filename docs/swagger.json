@@ -349,6 +349,103 @@
                     }
                 }
             }
+        },
+        "/templates": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "List templates",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.templateListResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Placeholders are written {{name}} and filled from a notification's variables. Values are inserted verbatim; nothing is evaluated.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Create a message template",
+                "parameters": [
+                    {
+                        "description": "Template",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.createTemplateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.templateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "409": {
+                        "description": "Name already taken",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/templates/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Get a template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.templateResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -401,6 +498,16 @@
                 },
                 "scheduledAt": {
                     "type": "string"
+                },
+                "templateId": {
+                    "description": "TemplateID renders content from a template; content must then be\nempty and channel may be omitted.",
+                    "type": "string"
+                },
+                "variables": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -485,6 +592,38 @@
                 },
                 "scheduledAt": {
                     "type": "string"
+                },
+                "templateId": {
+                    "description": "TemplateID renders content from a template; content must then be\nempty and channel may be omitted.",
+                    "type": "string"
+                },
+                "variables": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "httpapi.createTemplateRequest": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string",
+                    "example": "Hi {{name}}, order {{orderId}} is on its way."
+                },
+                "channel": {
+                    "type": "string",
+                    "enum": [
+                        "sms",
+                        "email",
+                        "push"
+                    ],
+                    "example": "sms"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "order-shipped"
                 }
             }
         },
@@ -570,6 +709,9 @@
                 "status": {
                     "type": "string"
                 },
+                "templateId": {
+                    "type": "string"
+                },
                 "updatedAt": {
                     "type": "string"
                 }
@@ -617,8 +759,48 @@
                 "status": {
                     "type": "string"
                 },
+                "templateId": {
+                    "type": "string"
+                },
                 "updatedAt": {
                     "type": "string"
+                }
+            }
+        },
+        "httpapi.templateListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpapi.templateResponse"
+                    }
+                }
+            }
+        },
+        "httpapi.templateResponse": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "variables": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         }

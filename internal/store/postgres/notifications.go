@@ -14,14 +14,14 @@ import (
 
 const notificationColumns = `id, batch_id, idempotency_key, request_hash, channel, recipient, content,
 	priority, status, attempts, scheduled_at, provider_message_id, last_error,
-	correlation_id, created_at, updated_at`
+	correlation_id, template_id, created_at, updated_at`
 
 func scanNotification(row pgx.Row) (domain.Notification, error) {
 	var n domain.Notification
 	var correlationID *string
 	err := row.Scan(&n.ID, &n.BatchID, &n.IdempotencyKey, &n.RequestHash, &n.Channel, &n.Recipient,
 		&n.Content, &n.Priority, &n.Status, &n.Attempts, &n.ScheduledAt, &n.ProviderMessageID,
-		&n.LastError, &correlationID, &n.CreatedAt, &n.UpdatedAt)
+		&n.LastError, &correlationID, &n.TemplateID, &n.CreatedAt, &n.UpdatedAt)
 	if correlationID != nil {
 		n.CorrelationID = *correlationID
 	}
@@ -68,12 +68,12 @@ func insertNotifications(ctx context.Context, tx pgx.Tx, ns []domain.Notificatio
 		n := &ns[i]
 		b.Queue(`INSERT INTO notifications
 			(id, batch_id, idempotency_key, request_hash, channel, recipient, content,
-			 priority, status, scheduled_at, correlation_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 priority, status, scheduled_at, correlation_id, template_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT (idempotency_key) DO NOTHING
 			RETURNING created_at, updated_at`,
 			n.ID, n.BatchID, n.IdempotencyKey, n.RequestHash, n.Channel, n.Recipient, n.Content,
-			n.Priority, n.Status, n.ScheduledAt, nullIfEmpty(n.CorrelationID),
+			n.Priority, n.Status, n.ScheduledAt, nullIfEmpty(n.CorrelationID), n.TemplateID,
 		).QueryRow(func(row pgx.Row) error {
 			err := row.Scan(&n.CreatedAt, &n.UpdatedAt)
 			if isNoRows(err) {

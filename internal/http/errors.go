@@ -21,6 +21,7 @@ const (
 	codeInternal        = "internal"
 	codeIdempotency     = "idempotency_conflict"
 	codeOverloaded      = "overloaded"
+	codeNameTaken       = "name_taken"
 )
 
 type errorBody struct {
@@ -60,6 +61,8 @@ func writeServiceError(ctx context.Context, w http.ResponseWriter, log *slog.Log
 		writeError(w, http.StatusConflict, codeIdempotency, "a concurrent request with the same idempotency key is in progress", nil)
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, "resource not found", nil)
+	case errors.Is(err, domain.ErrNameTaken):
+		writeError(w, http.StatusConflict, codeNameTaken, "a template with this name already exists", nil)
 	case errors.Is(err, domain.ErrInvalidState):
 		writeError(w, http.StatusConflict, codeInvalidState, err.Error(), nil)
 	default:

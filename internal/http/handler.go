@@ -25,6 +25,9 @@ type NotificationService interface {
 	GetBatch(ctx context.Context, id uuid.UUID) (service.BatchSummary, error)
 	List(ctx context.Context, q service.ListQuery) (service.Page, error)
 	Retry(ctx context.Context, id uuid.UUID) (domain.Notification, error)
+	CreateTemplate(ctx context.Context, in service.TemplateInput) (domain.Template, error)
+	GetTemplate(ctx context.Context, id uuid.UUID) (domain.Template, error)
+	ListTemplates(ctx context.Context) ([]domain.Template, error)
 }
 
 type Handler struct {
@@ -67,6 +70,9 @@ func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/notifications/{id}/retry", h.retryNotification)
 	mux.Handle("POST /api/v1/notifications/batch", opts.Backpressure.wrap(http.HandlerFunc(h.createBatch)))
 	mux.HandleFunc("GET /api/v1/batches/{id}", h.getBatch)
+	mux.HandleFunc("POST /api/v1/templates", h.createTemplate)
+	mux.HandleFunc("GET /api/v1/templates", h.listTemplates)
+	mux.HandleFunc("GET /api/v1/templates/{id}", h.getTemplate)
 
 	// Outermost first: correlation ID must exist before anything logs.
 	var handler http.Handler = mux
@@ -327,4 +333,72 @@ func pathID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.UUID{}, false
 	}
 	return id, true
+}
+
+// createTemplate godoc
+//
+//	@Summary		Create a message template
+//	@Description	Placeholders are written {{name}} and filled from a notification's variables. Values are inserted verbatim; nothing is evaluated.
+//	@Tags			templates
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		createTemplateRequest	true	"Template"
+//	@Success		201		{object}	templateResponse
+//	@Failure		400		{object}	errorBody
+//	@Failure		409		{object}	errorBody	"Name already taken"
+//	@Router			/templates [post]
+func (h *Handler) createTemplate(w http.ResponseWriter, r *http.Request) {
+	var req createTemplateRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	t, err := h.svc.CreateTemplate(r.Context(), service.TemplateInput{Name: req.Name, Channel: req.Channel, Body: req.Body})
+	if err != nil {
+		writeServiceError(r.Context(), w, h.log, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/templates/"+t.ID.String())
+	writeJSON(w, http.StatusCreated, toTemplateResponse(t))
+}
+
+// listTemplates godoc
+//
+//	@Summary	List templates
+//	@Tags		templates
+//	@Produce	json
+//	@Success	200	{object}	templateListResponse
+//	@Router		/templates [get]
+func (h *Handler) listTemplates(w http.ResponseWriter, r *http.Request) {
+	ts, err := h.svc.ListTemplates(r.Context())
+	if err != nil {
+		writeServiceError(r.Context(), w, h.log, err)
+		return
+	}
+	items := make([]templateResponse, len(ts))
+	for i, t := range ts {
+		items[i] = toTemplateResponse(t)
+	}
+	writeJSON(w, http.StatusOK, templateListResponse{Items: items})
+}
+
+// getTemplate godoc
+//
+//	@Summary	Get a template
+//	@Tags		templates
+//	@Produce	json
+//	@Param		id	path		string	true	"Template ID"
+//	@Success	200	{object}	templateResponse
+//	@Failure	404	{object}	errorBody
+//	@Router		/templates/{id} [get]
+func (h *Handler) getTemplate(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	t, err := h.svc.GetTemplate(r.Context(), id)
+	if err != nil {
+		writeServiceError(r.Context(), w, h.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toTemplateResponse(t))
 }

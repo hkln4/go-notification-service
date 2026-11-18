@@ -5,6 +5,7 @@ import (
 
 	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/service"
+	"github.com/hkln4/go-notification-service/internal/template"
 )
 
 type createNotificationRequest struct {
@@ -13,6 +14,10 @@ type createNotificationRequest struct {
 	Content     string     `json:"content" example:"Your order has shipped"`
 	Priority    string     `json:"priority,omitempty" enums:"high,normal,low" example:"high"`
 	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
+	// TemplateID renders content from a template; content must then be
+	// empty and channel may be omitted.
+	TemplateID string            `json:"templateId,omitempty"`
+	Variables  map[string]string `json:"variables,omitempty"`
 }
 
 func (r createNotificationRequest) input() domain.NotificationInput {
@@ -22,6 +27,8 @@ func (r createNotificationRequest) input() domain.NotificationInput {
 		Content:     r.Content,
 		Priority:    r.Priority,
 		ScheduledAt: r.ScheduledAt,
+		TemplateID:  r.TemplateID,
+		Variables:   r.Variables,
 	}
 }
 
@@ -38,6 +45,7 @@ type notificationResponse struct {
 	ProviderMessageID *string    `json:"providerMessageId,omitempty"`
 	LastError         *string    `json:"lastError,omitempty"`
 	CorrelationID     string     `json:"correlationId,omitempty"`
+	TemplateID        *string    `json:"templateId,omitempty"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
 }
@@ -61,6 +69,10 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 	if n.BatchID != nil {
 		s := n.BatchID.String()
 		r.BatchID = &s
+	}
+	if n.TemplateID != nil {
+		s := n.TemplateID.String()
+		r.TemplateID = &s
 	}
 	return r
 }
@@ -155,4 +167,34 @@ func toListResponse(p service.Page) listResponse {
 		items[i] = toNotificationResponse(n)
 	}
 	return listResponse{Items: items, NextCursor: p.NextCursor}
+}
+
+type createTemplateRequest struct {
+	Name    string `json:"name" example:"order-shipped"`
+	Channel string `json:"channel" enums:"sms,email,push" example:"sms"`
+	Body    string `json:"body" example:"Hi {{name}}, order {{orderId}} is on its way."`
+}
+
+type templateResponse struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Channel   string    `json:"channel"`
+	Body      string    `json:"body"`
+	Variables []string  `json:"variables"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func toTemplateResponse(t domain.Template) templateResponse {
+	vars := template.Variables(t.Body)
+	if vars == nil {
+		vars = []string{}
+	}
+	return templateResponse{
+		ID: t.ID.String(), Name: t.Name, Channel: string(t.Channel), Body: t.Body,
+		Variables: vars, CreatedAt: t.CreatedAt,
+	}
+}
+
+type templateListResponse struct {
+	Items []templateResponse `json:"items"`
 }

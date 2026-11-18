@@ -76,7 +76,7 @@ func (db *DB) Close(ctx context.Context) {
 func (db *DB) Reset(t testing.TB) {
 	t.Helper()
 	_, err := db.Pool.Exec(context.Background(),
-		`TRUNCATE outbox, delivery_attempts, notifications, batches RESTART IDENTITY CASCADE`)
+		`TRUNCATE outbox, delivery_attempts, notifications, batches, templates RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset database: %v", err)
 	}

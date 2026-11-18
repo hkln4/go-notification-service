@@ -63,7 +63,7 @@ func (s *Service) CreateBatch(ctx context.Context, req CreateBatchRequest) (Batc
 		return BatchResult{}, keyError("Idempotency-Key", nil)
 	}
 
-	hashed, err := s.validateItems(req.Items)
+	hashed, err := s.validateItems(ctx, req.Items)
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -79,13 +79,13 @@ func (s *Service) CreateBatch(ctx context.Context, req CreateBatchRequest) (Batc
 	return BatchResult{}, domain.ErrDuplicateKey
 }
 
-func (s *Service) validateItems(items []BatchItem) ([]hashedItem, error) {
-	now := s.now()
+func (s *Service) validateItems(ctx context.Context, items []BatchItem) ([]hashedItem, error) {
 	hashed := make([]hashedItem, len(items))
 	seenKeys := map[string]int{}
+	cache := templateCache{} // a batch usually uses one template many times
 	var verr domain.ValidationError
 	for i, item := range items {
-		nn, err := item.Input.Validate(now)
+		nn, err := s.prepare(ctx, item.Input, cache)
 		var itemErr *domain.ValidationError
 		if errors.As(err, &itemErr) {
 			verr.Fields = append(verr.Fields, withIndex(i, itemErr.Fields)...)

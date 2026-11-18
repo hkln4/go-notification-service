@@ -16,6 +16,7 @@ import (
 
 // fakeStore keeps notifications in memory. Only what the tests need.
 type fakeStore struct {
+	templates     map[uuid.UUID]domain.Template
 	notifications map[uuid.UUID]domain.Notification
 	batches       map[uuid.UUID]domain.Batch
 	inserts       int
@@ -27,7 +28,11 @@ type fakeStore struct {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{notifications: map[uuid.UUID]domain.Notification{}, batches: map[uuid.UUID]domain.Batch{}}
+	return &fakeStore{
+		notifications: map[uuid.UUID]domain.Notification{},
+		batches:       map[uuid.UUID]domain.Batch{},
+		templates:     map[uuid.UUID]domain.Template{},
+	}
 }
 
 // InsertNotifications mimics the store's ON CONFLICT behaviour: a taken key
@@ -175,6 +180,32 @@ func (f *fakeStore) Requeue(_ context.Context, id uuid.UUID) (domain.Notificatio
 	n.Status, n.Attempts = domain.StatusPending, 0
 	f.notifications[id] = n
 	return n, nil
+}
+
+func (f *fakeStore) CreateTemplate(_ context.Context, t *domain.Template) error {
+	for _, prev := range f.templates {
+		if prev.Name == t.Name {
+			return domain.ErrNameTaken
+		}
+	}
+	f.templates[t.ID] = *t
+	return nil
+}
+
+func (f *fakeStore) GetTemplate(_ context.Context, id uuid.UUID) (domain.Template, error) {
+	t, ok := f.templates[id]
+	if !ok {
+		return domain.Template{}, domain.ErrNotFound
+	}
+	return t, nil
+}
+
+func (f *fakeStore) ListTemplates(context.Context) ([]domain.Template, error) {
+	var ts []domain.Template
+	for _, t := range f.templates {
+		ts = append(ts, t)
+	}
+	return ts, nil
 }
 
 var fixedNow = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)

@@ -80,6 +80,7 @@ services:
       REDIS_ADDR: redis:6379
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
+      BACKPRESSURE_LIMIT: ${BACKPRESSURE_LIMIT:-50000}
     ports:
       - "8080:8080"
     depends_on:

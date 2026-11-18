@@ -37,6 +37,9 @@ type Options struct {
 	Metrics *observability.Metrics
 	// Ready answers /ready; nil means always ready.
 	Ready http.Handler
+	// Backpressure rejects new notifications while the backlog is too
+	// long; the zero value disables it.
+	Backpressure Backpressure
 }
 
 // New returns the full HTTP handler with middleware applied. Routing uses the
@@ -51,11 +54,11 @@ func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
 	mux.Handle("GET /metrics", opts.Metrics.Handler())
 	mux.Handle("GET /health", observability.HealthHandler())
 	mux.Handle("GET /ready", opts.Ready)
-	mux.HandleFunc("POST /api/v1/notifications", h.createNotification)
+	mux.Handle("POST /api/v1/notifications", opts.Backpressure.wrap(http.HandlerFunc(h.createNotification)))
 	mux.HandleFunc("GET /api/v1/notifications", h.listNotifications)
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.getNotification)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/cancel", h.cancelNotification)
-	mux.HandleFunc("POST /api/v1/notifications/batch", h.createBatch)
+	mux.Handle("POST /api/v1/notifications/batch", opts.Backpressure.wrap(http.HandlerFunc(h.createBatch)))
 	mux.HandleFunc("GET /api/v1/batches/{id}", h.getBatch)
 
 	// Outermost first: correlation ID must exist before anything logs.

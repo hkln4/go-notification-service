@@ -281,3 +281,26 @@ func TestMetricsUseRoutePattern(t *testing.T) {
 	require.NotContains(t, out, knownID.String(), "IDs must not become label values")
 	require.Contains(t, out, `notifications_created_total{channel="sms"} 1`)
 }
+
+func TestBackpressure(t *testing.T) {
+	backlog := 0
+	h := New(&fakeService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+		Backpressure: Backpressure{Backlog: func() int { return backlog }, Limit: 100, RetryAfter: 5 * time.Second},
+	})
+	create := `{"channel":"sms","recipient":"+905551234567","content":"x"}`
+
+	backlog = 100 // at the limit: still accepted
+	require.Equal(t, http.StatusAccepted, do(t, h, "POST", "/api/v1/notifications", create).Code)
+
+	backlog = 101
+	rec := do(t, h, "POST", "/api/v1/notifications", create)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	require.Equal(t, "5", rec.Header().Get("Retry-After"))
+	require.Equal(t, codeOverloaded, errorCode(t, rec))
+	require.Equal(t, http.StatusTooManyRequests,
+		do(t, h, "POST", "/api/v1/notifications/batch", `{"notifications":[`+create+`]}`).Code)
+
+	// Reads and cancels keep working while overloaded.
+	require.Equal(t, http.StatusOK, do(t, h, "GET", "/api/v1/notifications/"+knownID.String(), "").Code)
+	require.Equal(t, http.StatusConflict, do(t, h, "POST", "/api/v1/notifications/"+knownID.String()+"/cancel", "").Code)
+}

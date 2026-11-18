@@ -20,6 +20,7 @@ const (
 	codePayloadTooLarge = "payload_too_large"
 	codeInternal        = "internal"
 	codeIdempotency     = "idempotency_conflict"
+	codeOverloaded      = "overloaded"
 )
 
 type errorBody struct {

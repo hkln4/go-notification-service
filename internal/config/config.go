@@ -111,17 +111,21 @@ type API struct {
 	LogLevel        string
 	RetryDelays     []time.Duration
 	ShutdownTimeout time.Duration
+	// BackpressureLimit is the outbox backlog above which creates get 429.
+	// 0 disables it.
+	BackpressureLimit int
 }
 
 func LoadAPI(r *Reader) (API, error) {
 	c := API{
-		HTTPAddr:        r.String("HTTP_ADDR", ":8080"),
-		DatabaseURL:     r.String("DATABASE_URL", DefaultDatabaseURL),
-		AMQPURL:         r.String("AMQP_URL", DefaultAMQPURL),
-		RedisAddr:       r.String("REDIS_ADDR", "localhost:6379"),
-		LogLevel:        r.String("LOG_LEVEL", DefaultLogLevel),
-		RetryDelays:     r.Durations("RETRY_DELAYS", DefaultRetryDelays),
-		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		HTTPAddr:          r.String("HTTP_ADDR", ":8080"),
+		DatabaseURL:       r.String("DATABASE_URL", DefaultDatabaseURL),
+		AMQPURL:           r.String("AMQP_URL", DefaultAMQPURL),
+		RedisAddr:         r.String("REDIS_ADDR", "localhost:6379"),
+		LogLevel:          r.String("LOG_LEVEL", DefaultLogLevel),
+		RetryDelays:       r.Durations("RETRY_DELAYS", DefaultRetryDelays),
+		ShutdownTimeout:   r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		BackpressureLimit: r.Int("BACKPRESSURE_LIMIT", 50_000),
 	}
 	return c, r.Err()
 }

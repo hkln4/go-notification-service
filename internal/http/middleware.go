@@ -91,3 +91,33 @@ func limitBody(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// Backpressure sheds load at the front door. When the relay can't keep up
+// (broker down, burst far above what the workers drain), accepted
+// notifications pile up in the outbox. Past Limit, creating more only makes
+// every notification later, so create requests get 429 with Retry-After and
+// clients back off. Reads and cancels are never refused.
+type Backpressure struct {
+	// Backlog returns the latest sampled outbox backlog. It must be cheap:
+	// it runs on every create request, so it reads a cached value rather
+	// than counting rows.
+	Backlog    func() int
+	Limit      int
+	RetryAfter time.Duration
+}
+
+func (b Backpressure) wrap(next http.Handler) http.Handler {
+	if b.Backlog == nil || b.Limit <= 0 {
+		return next
+	}
+	retryAfter := strconv.Itoa(int(max(b.RetryAfter, time.Second).Seconds()))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if b.Backlog() > b.Limit {
+			w.Header().Set("Retry-After", retryAfter)
+			writeError(w, http.StatusTooManyRequests, codeOverloaded,
+				"too many notifications waiting to be sent; retry later", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

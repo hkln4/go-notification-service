@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -55,7 +56,8 @@ func run() error {
 	defer func() { _ = rdb.Close() }()
 
 	metrics := observability.NewMetrics()
-	go sample(ctx, store, mq, metrics, log)
+	var backlog atomic.Int64
+	go sample(ctx, store, mq, metrics, &backlog, log)
 
 	ready := observability.ReadyHandler(2*time.Second,
 		observability.Check{Name: "postgres", Ping: store.Ping},
@@ -69,8 +71,16 @@ func run() error {
 	)
 
 	srv := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: httpapi.New(service.New(store), log, httpapi.Options{Metrics: metrics, Ready: ready}),
+		Addr: cfg.HTTPAddr,
+		Handler: httpapi.New(service.New(store), log, httpapi.Options{
+			Metrics: metrics,
+			Ready:   ready,
+			Backpressure: httpapi.Backpressure{
+				Backlog:    func() int { return int(backlog.Load()) },
+				Limit:      cfg.BackpressureLimit,
+				RetryAfter: 5 * time.Second,
+			},
+		}),
 		// Bound how long a slow client can hold a connection.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -101,8 +111,10 @@ func run() error {
 }
 
 // sample refreshes the gauges that come from outside the process: outbox
-// backlog every second and queue depths every five.
-func sample(ctx context.Context, store *postgres.Store, mq *broker.Client, m *observability.Metrics, log *slog.Logger) {
+// backlog every second (also cached in backlog for backpressure) and queue
+// depths every five.
+func sample(ctx context.Context, store *postgres.Store, mq *broker.Client, m *observability.Metrics,
+	backlog *atomic.Int64, log *slog.Logger) {
 	queues := []string{broker.QueueDLQ}
 	for _, ch := range domain.Channels {
 		queues = append(queues, broker.WorkQueue(string(ch)))
@@ -117,6 +129,7 @@ func sample(ctx context.Context, store *postgres.Store, mq *broker.Client, m *ob
 		}
 		if n, err := store.OutboxBacklog(ctx); err == nil {
 			m.OutboxBacklog(n)
+			backlog.Store(int64(n))
 		} else if ctx.Err() == nil {
 			log.Warn("outbox backlog sample failed", "err", err)
 		}

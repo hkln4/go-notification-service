@@ -7,6 +7,8 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/hkln4/go-notification-service/internal/domain"
 )
 
 const (
@@ -25,12 +27,18 @@ const (
 	MaxPriority = 2
 )
 
-// DefaultRetryDelays is the retry ladder: attempt 1 failed → 5s, ... → 10m.
-var DefaultRetryDelays = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute, 10 * time.Minute}
-
 type Topology struct {
 	Channels    []string
 	RetryDelays []time.Duration
+}
+
+// NewTopology covers every domain channel with the given retry delays.
+func NewTopology(retryDelays []time.Duration) Topology {
+	channels := make([]string, len(domain.Channels))
+	for i, c := range domain.Channels {
+		channels[i] = string(c)
+	}
+	return Topology{Channels: channels, RetryDelays: retryDelays}
 }
 
 func WorkQueue(channel string) string { return "q." + channel }

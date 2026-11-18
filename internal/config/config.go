@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -69,6 +70,24 @@ func (r *Reader) Duration(key string, def time.Duration) time.Duration {
 	return d
 }
 
+// Durations parses a comma separated list such as "5s,30s,2m,10m".
+func (r *Reader) Durations(key string, def []time.Duration) []time.Duration {
+	v, ok := r.lookup(key)
+	if !ok || v == "" {
+		return def
+	}
+	var out []time.Duration
+	for _, part := range strings.Split(v, ",") {
+		d, err := time.ParseDuration(strings.TrimSpace(part))
+		if err != nil || d <= 0 {
+			r.errs = append(r.errs, fmt.Errorf("%s: %q is not a list of positive durations", key, v))
+			return def
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // Err returns every parse error seen so far, or nil.
 func (r *Reader) Err() error {
 	if len(r.errs) == 0 {
@@ -79,6 +98,7 @@ func (r *Reader) Err() error {
 
 // Defaults shared by several binaries.
 const (
+	DefaultAMQPURL     = "amqp://notification:notification@localhost:5672/"                                 //nolint:gosec // local dev default, same as docker-compose
 	DefaultDatabaseURL = "postgres://notification:notification@localhost:5432/notification?sslmode=disable" //nolint:gosec // local dev default, same as docker-compose
 	DefaultLogLevel    = "info"
 )
@@ -96,6 +116,33 @@ func LoadAPI(r *Reader) (API, error) {
 		DatabaseURL:     r.String("DATABASE_URL", DefaultDatabaseURL),
 		LogLevel:        r.String("LOG_LEVEL", DefaultLogLevel),
 		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
+	}
+	return c, r.Err()
+}
+
+// DefaultRetryDelays is the retry ladder: attempt 1 failed → 5s ... → 10m.
+var DefaultRetryDelays = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute, 10 * time.Minute}
+
+type Relay struct {
+	DatabaseURL  string
+	AMQPURL      string
+	LogLevel     string
+	BatchSize    int
+	PollInterval time.Duration
+	Lease        time.Duration
+	RetryDelays  []time.Duration
+}
+
+func LoadRelay(r *Reader) (Relay, error) {
+	c := Relay{
+		DatabaseURL:  r.String("DATABASE_URL", DefaultDatabaseURL),
+		AMQPURL:      r.String("AMQP_URL", DefaultAMQPURL),
+		LogLevel:     r.String("LOG_LEVEL", DefaultLogLevel),
+		BatchSize:    r.Int("RELAY_BATCH_SIZE", 100),
+		PollInterval: r.Duration("RELAY_POLL_INTERVAL", 200*time.Millisecond),
+		Lease:        r.Duration("RELAY_LEASE", 30*time.Second),
+		// Needed because every binary declares the full topology.
+		RetryDelays: r.Durations("RETRY_DELAYS", DefaultRetryDelays),
 	}
 	return c, r.Err()
 }

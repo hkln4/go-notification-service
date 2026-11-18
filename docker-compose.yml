@@ -8,6 +8,7 @@ x-app: &app
   restart: unless-stopped
 
 x-database-url: &database-url postgres://${POSTGRES_USER:-notification}:${POSTGRES_PASSWORD:-notification}@postgres:5432/${POSTGRES_DB:-notification}?sslmode=disable
+x-amqp-url: &amqp-url amqp://${RABBITMQ_USER:-notification}:${RABBITMQ_PASSWORD:-notification}@rabbitmq:5672/
 
 services:
   postgres:
@@ -80,6 +81,22 @@ services:
       - "8080:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  relay:
+    <<: *app
+    command: ["/app/relay"]
+    environment:
+      DATABASE_URL: *database-url
+      AMQP_URL: *amqp-url
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

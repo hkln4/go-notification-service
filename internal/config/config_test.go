@@ -20,6 +20,11 @@ func TestReader(t *testing.T) {
 	require.Equal(t, 7, r.Int("MISSING", 7))
 	require.NoError(t, r.Err())
 
+	require.Equal(t, []time.Duration{time.Second, 2 * time.Minute}, NewReaderFrom(map[string]string{"L": "1s, 2m"}).Durations("L", nil))
+	bad := NewReaderFrom(map[string]string{"L": "1s,-2s"})
+	require.Equal(t, DefaultRetryDelays, bad.Durations("L", DefaultRetryDelays))
+	require.Error(t, bad.Err())
+
 	r.Int("BAD_I", 0)
 	r.Duration("BAD_D", 0)
 	err := r.Err()

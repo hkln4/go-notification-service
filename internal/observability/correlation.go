@@ -6,8 +6,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// CorrelationHeader is used on HTTP requests/responses and AMQP messages.
+// CorrelationHeader is used on HTTP requests and responses.
 const CorrelationHeader = "X-Correlation-ID"
+
+// CorrelationHeaderKey carries the correlation ID in outbox rows and AMQP
+// message headers.
+const CorrelationHeaderKey = "x-correlation-id"
 
 const maxCorrelationIDLen = 128
 

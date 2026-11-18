@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/hkln4/go-notification-service/internal/domain"
+	"github.com/hkln4/go-notification-service/internal/observability"
 )
 
 const notificationColumns = `id, batch_id, idempotency_key, request_hash, channel, recipient, content,
@@ -97,7 +98,7 @@ func insertNotifications(ctx context.Context, tx pgx.Tx, ns []domain.Notificatio
 func outboxHeaders(n *domain.Notification) map[string]string {
 	h := map[string]string{}
 	if n.CorrelationID != "" {
-		h["x-correlation-id"] = n.CorrelationID
+		h[observability.CorrelationHeaderKey] = n.CorrelationID
 	}
 	return h
 }

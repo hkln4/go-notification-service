@@ -154,11 +154,12 @@ func newHarness() *harness {
 	}
 }
 
+func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
 func (h *harness) run(t *testing.T, body []byte) *fakeAck {
 	t.Helper()
 	w := New(h.store, h.pub, h.sender, h.lim,
-		Config{Lease: 60 * time.Millisecond, TokenWait: time.Second, RetryDelays: delays, MaxAttempts: 5},
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
+		Config{Lease: 60 * time.Millisecond, TokenWait: time.Second, RetryDelays: delays, MaxAttempts: 5}, quietLog())
 	ack := &fakeAck{}
 	w.Handle(context.Background(), amqp.Delivery{
 		Acknowledger: ack, DeliveryTag: 1, Body: body, MessageId: "m1", Priority: 2, CorrelationId: "c1",

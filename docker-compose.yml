@@ -105,6 +105,9 @@ services:
   worker:
     <<: *app
     command: ["/app/worker"]
+    # Longer than SHUTDOWN_TIMEOUT (10s), so Docker doesn't SIGKILL a worker
+    # that is still finishing in-flight messages.
+    stop_grace_period: 15s
     environment:
       DATABASE_URL: *database-url
       AMQP_URL: *amqp-url

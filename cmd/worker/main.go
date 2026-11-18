@@ -8,14 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/config"
-	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/observability"
 	"github.com/hkln4/go-notification-service/internal/provider"
 	"github.com/hkln4/go-notification-service/internal/ratelimit"
@@ -63,15 +61,7 @@ func run() error {
 	)
 
 	log.Info("worker started", "prefetch", cfg.Prefetch, "rate_per_second", cfg.RatePerSecond)
-	var wg sync.WaitGroup
-	for _, ch := range domain.Channels {
-		wg.Go(func() {
-			mq.Consume(ctx, broker.WorkQueue(string(ch)), cfg.Prefetch, func(d broker.Delivery) {
-				w.Handle(context.Background(), d)
-			})
-		})
-	}
-	wg.Wait()
+	w.Run(ctx, mq, cfg.Prefetch, cfg.ShutdownTimeout)
 	log.Info("worker stopped")
 	return nil
 }

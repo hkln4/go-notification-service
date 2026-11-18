@@ -101,6 +101,30 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Scale with: docker compose up --scale worker=3
+  worker:
+    <<: *app
+    command: ["/app/worker"]
+    environment:
+      DATABASE_URL: *database-url
+      AMQP_URL: *amqp-url
+      REDIS_ADDR: redis:6379
+      PROVIDER_URL: ${PROVIDER_URL:-http://mockprovider:9090/}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      mockprovider:
+        condition: service_started
+
   # Stands in for webhook.site, which stops answering after ~100 free
   # requests. Point PROVIDER_URL at webhook.site in .env to use it instead.
   mockprovider:

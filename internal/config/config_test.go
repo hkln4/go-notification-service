@@ -31,3 +31,14 @@ func TestReader(t *testing.T) {
 	require.ErrorContains(t, err, "BAD_I")
 	require.ErrorContains(t, err, "BAD_D")
 }
+
+func TestLoadWorkerValidates(t *testing.T) {
+	_, err := LoadWorker(NewReaderFrom(nil))
+	require.NoError(t, err, "defaults are valid")
+
+	_, err = LoadWorker(NewReaderFrom(map[string]string{"WORKER_LEASE": "5s", "PROVIDER_TIMEOUT": "5s"}))
+	require.ErrorContains(t, err, "WORKER_LEASE")
+
+	_, err = LoadWorker(NewReaderFrom(map[string]string{"WORKER_PREFETCH": "0"}))
+	require.Error(t, err)
+}

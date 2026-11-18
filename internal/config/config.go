@@ -146,3 +146,48 @@ func LoadRelay(r *Reader) (Relay, error) {
 	}
 	return c, r.Err()
 }
+
+type Worker struct {
+	DatabaseURL     string
+	AMQPURL         string
+	RedisAddr       string
+	ProviderURL     string
+	LogLevel        string
+	RatePerSecond   int
+	Prefetch        int
+	Lease           time.Duration
+	TokenWait       time.Duration
+	ProviderTimeout time.Duration
+	RetryDelays     []time.Duration
+	ShutdownTimeout time.Duration
+}
+
+func LoadWorker(r *Reader) (Worker, error) {
+	c := Worker{
+		DatabaseURL:     r.String("DATABASE_URL", DefaultDatabaseURL),
+		AMQPURL:         r.String("AMQP_URL", DefaultAMQPURL),
+		RedisAddr:       r.String("REDIS_ADDR", "localhost:6379"),
+		ProviderURL:     r.String("PROVIDER_URL", "http://localhost:9090/"),
+		LogLevel:        r.String("LOG_LEVEL", DefaultLogLevel),
+		RatePerSecond:   r.Int("RATE_LIMIT_PER_SECOND", 100),
+		Prefetch:        r.Int("WORKER_PREFETCH", 10),
+		Lease:           r.Duration("WORKER_LEASE", 30*time.Second),
+		TokenWait:       r.Duration("TOKEN_WAIT", 10*time.Second),
+		ProviderTimeout: r.Duration("PROVIDER_TIMEOUT", 5*time.Second),
+		RetryDelays:     r.Durations("RETRY_DELAYS", DefaultRetryDelays),
+		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
+	}
+	if err := r.Err(); err != nil {
+		return c, err
+	}
+	// A lease shorter than one provider call would let a second worker
+	// claim a notification that is still being sent.
+	if c.Lease <= c.ProviderTimeout {
+		return c, fmt.Errorf("invalid configuration: WORKER_LEASE (%s) must be longer than PROVIDER_TIMEOUT (%s)",
+			c.Lease, c.ProviderTimeout)
+	}
+	if c.RatePerSecond <= 0 || c.Prefetch <= 0 {
+		return c, fmt.Errorf("invalid configuration: RATE_LIMIT_PER_SECOND and WORKER_PREFETCH must be positive")
+	}
+	return c, nil
+}

@@ -10,8 +10,11 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Delivery is re-exported so callers don't import amqp091-go for it.
+type Delivery = amqp.Delivery
+
 // Handler processes one delivery and must ack or nack it.
-type Handler func(amqp.Delivery)
+type Handler func(Delivery)
 
 // Consume delivers messages from queue to handle, running up to prefetch
 // handlers at once (manual ack). It survives reconnects: when the channel or

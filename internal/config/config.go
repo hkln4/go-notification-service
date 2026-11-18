@@ -190,13 +190,18 @@ type Worker struct {
 
 func LoadWorker(r *Reader) (Worker, error) {
 	c := Worker{
-		DatabaseURL:      r.String("DATABASE_URL", DefaultDatabaseURL),
-		AMQPURL:          r.String("AMQP_URL", DefaultAMQPURL),
-		RedisAddr:        r.String("REDIS_ADDR", "localhost:6379"),
-		ProviderURL:      r.String("PROVIDER_URL", "http://localhost:9090/"),
-		MetricsAddr:      r.String("METRICS_ADDR", ":9100"),
-		LogLevel:         r.String("LOG_LEVEL", DefaultLogLevel),
-		RatePerSecond:    r.Int("RATE_LIMIT_PER_SECOND", 100),
+		DatabaseURL: r.String("DATABASE_URL", DefaultDatabaseURL),
+		AMQPURL:     r.String("AMQP_URL", DefaultAMQPURL),
+		RedisAddr:   r.String("REDIS_ADDR", "localhost:6379"),
+		ProviderURL: r.String("PROVIDER_URL", "http://localhost:9090/"),
+		MetricsAddr: r.String("METRICS_ADDR", ":9100"),
+		LogLevel:    r.String("LOG_LEVEL", DefaultLogLevel),
+		// 95, not 100: the limiter spaces slots exactly, but send times drift
+		// by a few ms on the way to the provider (scheduling, connection
+		// reuse). Under load the provider measured up to 104/s at a 100/s
+		// limit and 98/s at 95/s; the 5% headroom keeps the provider's view
+		// under the required 100 per second per channel.
+		RatePerSecond:    r.Int("RATE_LIMIT_PER_SECOND", 95),
 		Prefetch:         r.Int("WORKER_PREFETCH", 10),
 		Lease:            r.Duration("WORKER_LEASE", 30*time.Second),
 		TokenWait:        r.Duration("TOKEN_WAIT", 10*time.Second),

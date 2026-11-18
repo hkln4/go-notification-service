@@ -126,7 +126,7 @@ services:
       PROVIDER_URL: ${PROVIDER_URL:-http://mockprovider:9090/}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RETRY_DELAYS: ${RETRY_DELAYS:-5s,30s,2m,10m}
-      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-100}
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-95}
       OTEL_EXPORTER_OTLP_ENDPOINT: *otlp
     depends_on:
       postgres:

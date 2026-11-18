@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -54,30 +53,4 @@ func TestStatsCountDuplicatesAndRate(t *testing.T) {
 	st := s.Stats()
 	require.Equal(t, 6, st.Channels["sms"].Received)
 	require.Equal(t, 2, st.DuplicateKeys, "a and c were seen more than once")
-}
-
-func TestMaxInWindow(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	at := func(ms ...int) []time.Time {
-		out := make([]time.Time, len(ms))
-		for i, m := range ms {
-			out[i] = base.Add(time.Duration(m) * time.Millisecond)
-		}
-		return out
-	}
-	tests := []struct {
-		name  string
-		times []time.Time
-		want  int
-	}{
-		{"empty", nil, 0},
-		{"one", at(0), 1},
-		{"window is half open", at(0, 1000), 1},
-		{"just inside", at(0, 999), 2},
-		{"densest window wins", at(0, 100, 900, 950, 1500, 1600), 4},
-		{"unsorted input", at(950, 0, 900, 100), 4},
-	}
-	for _, tt := range tests {
-		require.Equal(t, tt.want, MaxInWindow(tt.times, time.Second), tt.name)
-	}
 }

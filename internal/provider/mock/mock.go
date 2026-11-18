@@ -8,11 +8,12 @@ import (
 	"encoding/json"
 	"math/rand/v2"
 	"net/http"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/hkln4/go-notification-service/internal/ratelimit"
 )
 
 type Config struct {
@@ -107,7 +108,7 @@ func (s *Server) Stats() Stats {
 	defer s.mu.Unlock()
 	st := Stats{Channels: map[string]ChannelStats{}}
 	for ch, times := range s.received {
-		st.Channels[ch] = ChannelStats{Received: len(times), MaxPerSecond: MaxInWindow(times, time.Second)}
+		st.Channels[ch] = ChannelStats{Received: len(times), MaxPerSecond: ratelimit.MaxInWindow(times, time.Second)}
 	}
 	for _, n := range s.keys {
 		if n > 1 {
@@ -127,21 +128,6 @@ func (s *Server) reset(w http.ResponseWriter, _ *http.Request) {
 	s.keys = map[string]int{}
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// MaxInWindow returns the largest number of times falling in any half-open
-// window [t, t+window). Two pointers over sorted times: O(n log n).
-func MaxInWindow(times []time.Time, window time.Duration) int {
-	sorted := slices.Clone(times)
-	slices.SortFunc(sorted, func(a, b time.Time) int { return a.Compare(b) })
-	best, lo := 0, 0
-	for hi := range sorted {
-		for sorted[hi].Sub(sorted[lo]) >= window {
-			lo++
-		}
-		best = max(best, hi-lo+1)
-	}
-	return best
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

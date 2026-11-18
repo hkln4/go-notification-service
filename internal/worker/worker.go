@@ -50,6 +50,7 @@ type Config struct {
 	// TokenWait caps how long a message waits for a rate limit slot.
 	TokenWait   time.Duration
 	RetryDelays []time.Duration
+	MaxAttempts int
 }
 
 type Worker struct {
@@ -58,6 +59,7 @@ type Worker struct {
 	sender  Sender
 	limiter Limiter
 	cfg     Config
+	policy  Policy
 	log     *slog.Logger
 	newID   func() uuid.UUID
 }
@@ -65,8 +67,9 @@ type Worker struct {
 func New(store Store, pub Publisher, sender Sender, limiter Limiter, cfg Config, log *slog.Logger) *Worker {
 	return &Worker{
 		store: store, pub: pub, sender: sender, limiter: limiter, cfg: cfg,
-		log:   log.With("component", "worker"),
-		newID: uuid.New,
+		policy: Policy{Delays: cfg.RetryDelays, MaxAttempts: cfg.MaxAttempts},
+		log:    log.With("component", "worker"),
+		newID:  uuid.New,
 	}
 }
 
@@ -104,7 +107,7 @@ func (w *Worker) Handle(ctx context.Context, d amqp.Delivery) {
 	res, sendErr := w.sender.Send(ctx, n.ID, n.CorrelationID, provider.Request{
 		To: n.Recipient, Channel: string(n.Channel), Content: n.Content,
 	})
-	if err := w.finish(n, lease, res, sendErr, log); err != nil {
+	if err := w.finish(d, n, lease, res, sendErr, log); err != nil {
 		// The outcome is not durable. Leave the message for redelivery: the
 		// lease expires and the next claim tries again.
 		log.Error("could not record outcome; returning message to queue", "err", err)
@@ -150,7 +153,7 @@ func (w *Worker) claim(d amqp.Delivery, msg domain.DeliveryMessage, log *slog.Lo
 		// that worker dies, this message is what gets the notification
 		// delivered once the lease expires. Park it for about a lease.
 		log.Info("notification leased by another worker; parking message")
-		w.settle(d, log, w.republish(d, msg.Channel, w.delayAtLeast(w.cfg.Lease)))
+		w.settle(d, log, w.republish(d, msg.Channel, w.policy.atLeast(w.cfg.Lease)))
 	default:
 		// The state changed under us (e.g. a lease expired just now).
 		w.settle(d, log, w.republish(d, msg.Channel, w.cfg.RetryDelays[0]))
@@ -158,20 +161,35 @@ func (w *Worker) claim(d amqp.Delivery, msg domain.DeliveryMessage, log *slog.Lo
 	return domain.Notification{}, uuid.Nil, false
 }
 
-// finish records the attempt and the new status, fenced by the lease.
-func (w *Worker) finish(n domain.Notification, lease uuid.UUID, res provider.Result, sendErr error, log *slog.Logger) error {
+// finish acts on the retry decision and records the attempt. The order is
+// always: publish the message's next step (retry queue or DLQ, confirmed)
+// → database update → ack (by the caller). If we crash after the publish
+// but before the update, the copy in the retry queue finds a processing
+// row whose lease expires and is claimed again: a repeat, never a loss.
+func (w *Worker) finish(d amqp.Delivery, n domain.Notification, lease uuid.UUID, res provider.Result, sendErr error, log *slog.Logger) error {
+	dec := w.policy.Decide(res.StatusCode, sendErr, n.Attempts, res.RetryAfter)
 	o := postgres.Outcome{
 		ID:      n.ID,
 		Lease:   lease,
 		Attempt: attemptRecord(n.Attempts, res, sendErr),
 	}
-	if sendErr == nil && res.StatusCode >= 200 && res.StatusCode < 300 {
+
+	switch dec.Action {
+	case ActionSent:
 		o.Status, o.ProviderMessageID = domain.StatusSent, res.MessageID
 		if res.BodyErr != nil {
 			log.Warn("provider accepted the message but its response was malformed", "err", res.BodyErr)
 		}
-	} else {
+	case ActionRetry:
+		o.Status, o.LastError = domain.StatusRetrying, describe(res, sendErr)
+		if err := w.republish(d, n.Channel, dec.Delay); err != nil {
+			return fmt.Errorf("publish retry: %w", err)
+		}
+	case ActionDeadLetter, ActionPermanentFail:
 		o.Status, o.LastError = domain.StatusFailed, describe(res, sendErr)
+		if err := w.deadLetter(d, n, dec.Action, o.LastError); err != nil {
+			return fmt.Errorf("publish to dlq: %w", err)
+		}
 	}
 
 	ctx, cancel := dbContext()
@@ -185,28 +203,29 @@ func (w *Worker) finish(n domain.Notification, lease uuid.UUID, res provider.Res
 		log.Warn("lease lost before recording outcome; result discarded", "status", o.Status)
 		return nil
 	}
-	log.Info("delivery attempt finished", "status", o.Status, "http_status", res.StatusCode,
-		"latency_ms", res.Latency.Milliseconds())
+	log.Info("delivery attempt finished", "decision", dec.Action.String(), "status", o.Status,
+		"http_status", res.StatusCode, "latency_ms", res.Latency.Milliseconds(), "retry_in", dec.Delay.String())
 	w.emit(n, o.Status)
 	return nil
 }
 
-// emit publishes a status change for live listeners (WebSocket). It is best
-// effort: the database already has the truth, and a missed event only
-// delays a UI update. Fanout exchanges may have no queue bound, so the
-// message is not mandatory.
-func (w *Worker) emit(n domain.Notification, st domain.Status) {
-	body, _ := json.Marshal(domain.StatusEvent{
-		NotificationID: n.ID, BatchID: n.BatchID, Status: st, Attempts: n.Attempts, At: time.Now().UTC(),
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := w.pub.Publish(ctx, broker.Message{
-		Exchange: broker.ExchangeEvents, Body: body, MessageID: n.ID.String(),
-		CorrelationID: n.CorrelationID, NotMandatory: true,
-	})[0]; err != nil {
-		w.log.Warn("status event not published", "notification_id", n.ID, "status", st, "err", err)
+// deadLetter parks a notification that won't be retried in the DLQ, with
+// the reason in headers, so it can be inspected and requeued later.
+func (w *Worker) deadLetter(d amqp.Delivery, n domain.Notification, why Action, lastErr string) error {
+	headers := amqp.Table{}
+	for k, v := range d.Headers {
+		headers[k] = v
 	}
+	headers["x-failure-reason"] = why.String()
+	headers["x-attempts"] = int32(n.Attempts) //nolint:gosec // bounded by MaxAttempts
+	headers["x-last-error"] = lastErr
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return w.pub.Publish(ctx, broker.Message{
+		RoutingKey: broker.QueueDLQ, Body: d.Body, MessageID: d.MessageId,
+		CorrelationID: d.CorrelationId, Priority: d.Priority, Headers: headers,
+	})[0]
 }
 
 func attemptRecord(attemptNo int, res provider.Result, sendErr error) domain.Attempt {
@@ -276,12 +295,20 @@ func (w *Worker) poison(d amqp.Delivery, err error) {
 	w.settle(d, w.log, perr)
 }
 
-// delayAtLeast picks the shortest retry queue that waits at least d.
-func (w *Worker) delayAtLeast(d time.Duration) time.Duration {
-	for _, delay := range w.cfg.RetryDelays {
-		if delay >= d {
-			return delay
-		}
+// emit publishes a status change for live listeners (WebSocket). It is best
+// effort: the database already has the truth, and a missed event only
+// delays a UI update. Fanout exchanges may have no queue bound, so the
+// message is not mandatory.
+func (w *Worker) emit(n domain.Notification, st domain.Status) {
+	body, _ := json.Marshal(domain.StatusEvent{
+		NotificationID: n.ID, BatchID: n.BatchID, Status: st, Attempts: n.Attempts, At: time.Now().UTC(),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := w.pub.Publish(ctx, broker.Message{
+		Exchange: broker.ExchangeEvents, Body: body, MessageID: n.ID.String(),
+		CorrelationID: n.CorrelationID, NotMandatory: true,
+	})[0]; err != nil {
+		w.log.Warn("status event not published", "notification_id", n.ID, "status", st, "err", err)
 	}
-	return w.cfg.RetryDelays[len(w.cfg.RetryDelays)-1]
 }

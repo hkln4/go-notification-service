@@ -159,6 +159,7 @@ type Worker struct {
 	TokenWait       time.Duration
 	ProviderTimeout time.Duration
 	RetryDelays     []time.Duration
+	MaxAttempts     int
 	ShutdownTimeout time.Duration
 }
 
@@ -175,6 +176,7 @@ func LoadWorker(r *Reader) (Worker, error) {
 		TokenWait:       r.Duration("TOKEN_WAIT", 10*time.Second),
 		ProviderTimeout: r.Duration("PROVIDER_TIMEOUT", 5*time.Second),
 		RetryDelays:     r.Durations("RETRY_DELAYS", DefaultRetryDelays),
+		MaxAttempts:     r.Int("MAX_ATTEMPTS", 5),
 		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 	if err := r.Err(); err != nil {
@@ -186,8 +188,8 @@ func LoadWorker(r *Reader) (Worker, error) {
 		return c, fmt.Errorf("invalid configuration: WORKER_LEASE (%s) must be longer than PROVIDER_TIMEOUT (%s)",
 			c.Lease, c.ProviderTimeout)
 	}
-	if c.RatePerSecond <= 0 || c.Prefetch <= 0 {
-		return c, fmt.Errorf("invalid configuration: RATE_LIMIT_PER_SECOND and WORKER_PREFETCH must be positive")
+	if c.RatePerSecond <= 0 || c.Prefetch <= 0 || c.MaxAttempts <= 0 {
+		return c, fmt.Errorf("invalid configuration: RATE_LIMIT_PER_SECOND, WORKER_PREFETCH and MAX_ATTEMPTS must be positive")
 	}
 	return c, nil
 }

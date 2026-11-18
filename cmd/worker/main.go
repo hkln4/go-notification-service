@@ -58,7 +58,7 @@ func run() error {
 		mq,
 		provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout),
 		ratelimit.NewRedis(rdb, cfg.RatePerSecond),
-		worker.Config{Lease: cfg.Lease, TokenWait: cfg.TokenWait, RetryDelays: cfg.RetryDelays},
+		worker.Config{Lease: cfg.Lease, TokenWait: cfg.TokenWait, RetryDelays: cfg.RetryDelays, MaxAttempts: cfg.MaxAttempts},
 		log,
 	)
 

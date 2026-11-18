@@ -157,7 +157,7 @@ func newHarness() *harness {
 func (h *harness) run(t *testing.T, body []byte) *fakeAck {
 	t.Helper()
 	w := New(h.store, h.pub, h.sender, h.lim,
-		Config{Lease: 60 * time.Millisecond, TokenWait: time.Second, RetryDelays: delays},
+		Config{Lease: 60 * time.Millisecond, TokenWait: time.Second, RetryDelays: delays, MaxAttempts: 5},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ack := &fakeAck{}
 	w.Handle(context.Background(), amqp.Delivery{
@@ -291,4 +291,54 @@ func TestHandleProviderAcceptedWithBadBody(t *testing.T) {
 	h.sender.res = provider.Result{StatusCode: 202, BodyErr: errors.New("bad json")}
 	h.run(t, body(t))
 	require.Equal(t, domain.StatusSent, h.store.outcomes[0].Status)
+}
+
+func TestHandleFailureOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		res         provider.Result
+		err         error
+		attempt     int // attempt number of this delivery
+		wantStatus  domain.Status
+		wantRouting string
+		wantReason  string
+	}{
+		{"500 retries with the ladder", provider.Result{StatusCode: 500}, nil, 2, domain.StatusRetrying, broker.RetryRoutingKey("sms", delays[1]), ""},
+		{"timeout retries", provider.Result{}, context.DeadlineExceeded, 1, domain.StatusRetrying, broker.RetryRoutingKey("sms", delays[0]), ""},
+		{"429 honours Retry-After", provider.Result{StatusCode: 429, RetryAfter: 80 * time.Millisecond}, nil, 1, domain.StatusRetrying, broker.RetryRoutingKey("sms", delays[2]), ""},
+		{"5th failure goes to DLQ", provider.Result{StatusCode: 503}, nil, 5, domain.StatusFailed, broker.QueueDLQ, "dead_letter"},
+		{"400 goes straight to DLQ", provider.Result{StatusCode: 400}, nil, 1, domain.StatusFailed, broker.QueueDLQ, "permanent_fail"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness()
+			h.store.n.Attempts = tt.attempt - 1 // Claim increments
+			h.sender.res, h.sender.err = tt.res, tt.err
+			ack := h.run(t, body(t))
+
+			require.True(t, ack.acked)
+			require.Equal(t, tt.wantStatus, h.store.outcomes[0].Status)
+			require.NotEmpty(t, h.store.outcomes[0].LastError)
+			sent := h.pub.sent()
+			require.Len(t, sent, 1)
+			require.Equal(t, tt.wantRouting, sent[0].RoutingKey)
+			if tt.wantReason != "" {
+				require.Equal(t, tt.wantReason, sent[0].Headers["x-failure-reason"])
+				require.EqualValues(t, tt.attempt, sent[0].Headers["x-attempts"])
+			}
+		})
+	}
+}
+
+// Publish → database → ack: if the retry message can't be published, the
+// database is not touched and the delivery goes back to the queue.
+func TestHandleRetryPublishFailureLeavesStateAlone(t *testing.T) {
+	h := newHarness()
+	h.sender.res = provider.Result{StatusCode: 500}
+	h.pub.err = errors.New("broker down")
+	ack := h.run(t, body(t))
+
+	require.True(t, ack.nacked)
+	require.True(t, ack.requeued)
+	require.Empty(t, h.store.outcomes, "no outcome recorded before the retry message is safe")
 }

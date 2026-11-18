@@ -75,6 +75,8 @@ type env struct {
 	// runs on the server's goroutines, hence the mutex.
 	mu    sync.Mutex
 	posts map[string]*atomic.Int32
+	// status, if set, is what the provider answers instead of 202.
+	status int
 }
 
 func (e *env) postCount(id uuid.UUID) int32 {
@@ -94,8 +96,13 @@ func newEnv(t *testing.T, providerLatency time.Duration) *env {
 		if c, ok := e.posts[r.Header.Get("Idempotency-Key")]; ok {
 			c.Add(1)
 		}
+		status := e.status
 		e.mu.Unlock()
 		time.Sleep(e.latency)
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"messageId":"pm","status":"accepted"}`))
 	}))
@@ -118,7 +125,7 @@ func newEnv(t *testing.T, providerLatency time.Duration) *env {
 
 	e.relay = relay.New(e.store, e.mq, relay.Config{BatchSize: 100, PollInterval: 20 * time.Millisecond, Lease: time.Minute}, quiet)
 	e.worker = worker.New(e.store, e.mq, provider.NewClient(srv.URL, 5*time.Second), ratelimit.NewMemory(1000),
-		worker.Config{Lease: lease, TokenWait: time.Second, RetryDelays: retryDelays}, quiet)
+		worker.Config{Lease: lease, TokenWait: time.Second, RetryDelays: retryDelays, MaxAttempts: 5}, quiet)
 	return e
 }
 
@@ -237,4 +244,28 @@ func TestHappyPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, attempts, 1)
 	require.Equal(t, 202, *attempts[0].HTTPStatus)
+}
+
+// The provider keeps failing with 500. The notification walks the whole
+// retry ladder (scaled down here) and after the 5th attempt lands in the
+// DLQ, marked failed, with every attempt recorded.
+func TestProvider500EndsInDLQAfterFiveAttempts(t *testing.T) {
+	e := newEnv(t, 0)
+	e.status = http.StatusInternalServerError
+	e.start(t)
+	id := e.create(t)
+
+	n := e.waitStatus(t, id, domain.StatusFailed)
+	require.Equal(t, 5, n.Attempts)
+	require.Equal(t, "provider returned 500", *n.LastError)
+	require.EqualValues(t, 5, e.postCount(id))
+
+	attempts, err := e.store.ListAttempts(context.Background(), id)
+	require.NoError(t, err)
+	require.Len(t, attempts, 5)
+
+	require.Eventually(t, func() bool {
+		depth, err := e.mq.QueueDepth(broker.QueueDLQ)
+		return err == nil && depth == 1
+	}, 5*time.Second, 50*time.Millisecond, "message must be in the DLQ")
 }

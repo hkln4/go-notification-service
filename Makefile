@@ -1,4 +1,4 @@
-.PHONY: build run test lint fmt tidy up down
+.PHONY: build run test lint fmt tidy up down migrate-up migrate-down
 
 build:
 	go build -o bin/ ./cmd/...
@@ -23,3 +23,9 @@ up:
 
 down:
 	docker-compose down
+
+migrate-up:
+	docker-compose run --rm migrate up
+
+migrate-down:
+	docker-compose run --rm migrate down 1

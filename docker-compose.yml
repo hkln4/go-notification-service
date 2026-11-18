@@ -45,5 +45,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot: applies pending migrations and exits 0. App services wait on it
+  # with condition: service_completed_successfully.
+  migrate:
+    image: migrate/migrate:v4.20.1
+    volumes:
+      - ./migrations:/migrations:ro
+    # Flags live in the entrypoint so `docker-compose run --rm migrate down 1`
+    # only has to pass the subcommand.
+    entrypoint:
+      - migrate
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER:-notification}:${POSTGRES_PASSWORD:-notification}@postgres:5432/${POSTGRES_DB:-notification}?sslmode=disable
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres-data:

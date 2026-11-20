@@ -149,7 +149,7 @@ func run(m *testing.M) (int, error) {
 	hub := ws.NewHub()
 	forward := hub.Forward(log)
 	wg.Go(func() { mqc.Subscribe(runCtx, broker.ExchangeEvents, func(d broker.Delivery) { forward(d.Body) }) })
-	api = httptest.NewServer(httpapi.New(service.New(store), log, httpapi.Options{
+	api = httptest.NewServer(httpapi.New(service.New(store, service.WithEvents(broker.StatusPublisher{Client: mqc})), log, httpapi.Options{
 		WebSocket: ws.NewHandler(hub, store.GetNotification, nil, log),
 	}))
 	defer api.Close()
@@ -400,4 +400,36 @@ func TestTraceSpansAllHops(t *testing.T) {
 	require.NotNil(t, apiSpan, "API request span is the root of the same trace")
 	require.Equal(t, apiSpan.SpanContext().SpanID(), relaySpan.Parent().SpanID())
 	require.NotNil(t, providerSpan, "provider call is traced under the worker span")
+}
+
+// A change made through the API, not by a worker, also reaches WebSocket
+// clients: cancelling a scheduled notification pushes "cancelled".
+func TestWebSocketSeesCancelFromAPI(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var created notification
+	call(t, http.MethodPost, "/api/v1/notifications", map[string]any{
+		"channel": "push", "recipient": "tok", "content": "ws cancel",
+		"scheduledAt": time.Now().Add(time.Hour).UTC(),
+	}, &created)
+
+	conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(api.URL, "http")+"/api/v1/ws?notificationId="+created.ID, nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	require.NoError(t, err)
+	defer func() { _ = conn.CloseNow() }()
+
+	read := func() domain.StatusEvent {
+		_, b, err := conn.Read(ctx)
+		require.NoError(t, err)
+		var e domain.StatusEvent
+		require.NoError(t, json.Unmarshal(b, &e))
+		return e
+	}
+	require.Equal(t, domain.StatusScheduled, read().Status, "snapshot on connect")
+
+	require.Equal(t, http.StatusOK, call(t, http.MethodPost, "/api/v1/notifications/"+created.ID+"/cancel", nil, nil))
+	require.Equal(t, domain.StatusCancelled, read().Status)
 }

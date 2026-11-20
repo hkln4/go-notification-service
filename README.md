@@ -95,6 +95,7 @@ flowchart LR
     rq -- "dead-letter on expiry" --> ex
     worker -- "out of attempts" --> dlq[q.dlq]
     worker -- "status event" --> events{{notification.events<br/>fanout}}
+    api -- "status event<br/>(cancel, retry)" --> events
     events --> api
     api -- WebSocket --> client
 ```
@@ -380,7 +381,7 @@ $ curl -s -X POST localhost:8080/api/v1/notifications \
 
 With `templateId`, `content` must be empty and `channel` may be omitted. A missing variable is a validation error (`"variables": "missing: orderId"`).
 
-**WebSocket.** Connect to `ws://localhost:8080/api/v1/ws?notificationId=<id>` or `?batchId=<id>`. The current state arrives first, then every change:
+**WebSocket.** Connect to `ws://localhost:8080/api/v1/ws?notificationId=<id>` or `?batchId=<id>`. The current state arrives first, then every change: workers announce processing, sent, retrying and failed, and the API announces the changes it makes itself (`cancelled` after a cancel, `pending` after a retry):
 
 ```json
 {"notificationId":"01a1efd9-67c2-7cc8-8520-0db2e0b384b7","status":"scheduled","attempts":0,"at":"2026-11-18T18:09:24.931Z"}

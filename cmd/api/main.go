@@ -97,7 +97,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
-		Handler: httpapi.New(service.New(store), log, httpapi.Options{
+		Handler: httpapi.New(service.New(store, service.WithEvents(broker.StatusPublisher{Client: mq})), log, httpapi.Options{
 			Metrics: metrics,
 			Ready:   ready,
 			Backpressure: httpapi.Backpressure{

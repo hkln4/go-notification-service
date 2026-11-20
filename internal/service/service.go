@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,10 +30,17 @@ type Store interface {
 	ListTemplates(ctx context.Context) ([]domain.Template, error)
 }
 
+// EventPublisher announces status changes made by the API (cancel, retry)
+// to live listeners. Workers announce their own changes.
+type EventPublisher interface {
+	PublishStatus(ctx context.Context, e domain.StatusEvent) error
+}
+
 type Service struct {
-	store Store
-	now   func() time.Time
-	newID func() uuid.UUID
+	store  Store
+	events EventPublisher // nil: no events
+	now    func() time.Time
+	newID  func() uuid.UUID
 }
 
 type Option func(*Service)
@@ -42,6 +50,10 @@ func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = 
 
 // WithIDs injects the ID generator.
 func WithIDs(newID func() uuid.UUID) Option { return func(s *Service) { s.newID = newID } }
+
+// WithEvents publishes the status changes the API makes, so WebSocket
+// clients see a cancel or a retry, not only what the workers do.
+func WithEvents(p EventPublisher) Option { return func(s *Service) { s.events = p } }
 
 func New(store Store, opts ...Option) *Service {
 	s := &Service{store: store, now: time.Now, newID: newUUIDv7}
@@ -154,12 +166,49 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (NotificationDetail, er
 	return NotificationDetail{Notification: n, Attempts: attempts}, nil
 }
 
+// Cancel stops a notification that has not been picked up yet. Cancelling an
+// already cancelled notification succeeds and announces "cancelled" again;
+// listeners get a duplicate event, which is harmless.
 func (s *Service) Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
-	return s.store.Cancel(ctx, id)
+	n, err := s.store.Cancel(ctx, id)
+	if err != nil {
+		return n, err
+	}
+	s.announce(ctx, n)
+	return n, nil
 }
 
 // Retry sends a failed (dead-lettered) notification again with a fresh set
 // of attempts.
 func (s *Service) Retry(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
-	return s.store.Requeue(ctx, id)
+	n, err := s.store.Requeue(ctx, id)
+	if err != nil {
+		return n, err
+	}
+	s.announce(ctx, n)
+	return n, nil
+}
+
+// announce publishes n's new status after the change is committed. It is
+// best effort, like the worker's events: the database already holds the
+// truth, so a failure is logged and never fails the request. The publish
+// gets its own short deadline and survives the client hanging up.
+func (s *Service) announce(ctx context.Context, n domain.Notification) {
+	if s.events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	err := s.events.PublishStatus(ctx, domain.StatusEvent{
+		NotificationID: n.ID,
+		BatchID:        n.BatchID,
+		Status:         n.Status,
+		Attempts:       n.Attempts,
+		// The database's time of the change, as in the WebSocket snapshot. A
+		// repeated cancel thus carries the original cancel time.
+		At: n.UpdatedAt,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "status event not published", "notification_id", n.ID, "status", n.Status, "err", err)
+	}
 }

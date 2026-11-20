@@ -223,8 +223,8 @@ Base path `/api/v1`. Every response has an `X-Correlation-ID` header, echoed fro
 
 | Method | Path | Result |
 |---|---|---|
-| POST | `/notifications` | `202`; `200` on an idempotent replay; `409` key reused with a different request; `429` backpressure |
-| POST | `/notifications/batch` | `202` with `batchId`; `400` with the bad item indexes; `409` |
+| POST | `/notifications` | `202`; `200` on an idempotent replay; `409` key reused with a different request; `413` body over 1 MB; `429` backpressure (with `Retry-After`) |
+| POST | `/notifications/batch` | `202` with `batchId`; `200` on a replay; `400` with the bad item indexes; `409`; `413` body over 16 MB; `429` backpressure (with `Retry-After`) |
 | GET | `/notifications/{id}` | `200` with delivery attempts |
 | GET | `/notifications?status&channel&from&to&cursor&limit` | `200`; newest first, `nextCursor` until the last page |
 | POST | `/notifications/{id}/cancel` | `200` (also when already cancelled); `409` once processing or final |

@@ -179,6 +179,24 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/httpapi.errorBody"
                         }
+                    },
+                    "413": {
+                        "description": "Body over 1 MB (the batch endpoint allows 16 MB)",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "429": {
+                        "description": "Backpressure: too many notifications waiting to be sent",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        },
+                        "headers": {
+                            "Retry-After": {
+                                "type": "integer",
+                                "description": "Seconds to wait before retrying"
+                            }
+                        }
                     }
                 }
             }
@@ -236,6 +254,24 @@ const docTemplate = `{
                         "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "413": {
+                        "description": "Body over 16 MB (other endpoints allow 1 MB)",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "429": {
+                        "description": "Backpressure: too many notifications waiting to be sent",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        },
+                        "headers": {
+                            "Retry-After": {
+                                "type": "integer",
+                                "description": "Seconds to wait before retrying"
+                            }
                         }
                     }
                 }
@@ -413,6 +449,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Name already taken",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.errorBody"
+                        }
+                    },
+                    "413": {
+                        "description": "Body over 1 MB",
                         "schema": {
                             "$ref": "#/definitions/httpapi.errorBody"
                         }

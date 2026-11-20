@@ -109,6 +109,9 @@ const IdempotencyKeyHeader = "Idempotency-Key"
 //	@Success		200				{object}	notificationResponse		"Replayed: same key and same request"
 //	@Failure		400				{object}	errorBody
 //	@Failure		409				{object}	errorBody	"Key reused with a different request"
+//	@Failure		413				{object}	errorBody	"Body over 1 MB (the batch endpoint allows 16 MB)"
+//	@Failure		429				{object}	errorBody	"Backpressure: too many notifications waiting to be sent"
+//	@Header			429				{integer}	Retry-After	"Seconds to wait before retrying"
 //	@Router			/notifications [post]
 func (h *Handler) createNotification(w http.ResponseWriter, r *http.Request) {
 	var req createNotificationRequest
@@ -217,6 +220,9 @@ func (h *Handler) retryNotification(w http.ResponseWriter, r *http.Request) {
 //	@Success		200				{object}	createBatchResponse	"Replayed: same key and same batch"
 //	@Failure		400				{object}	errorBody
 //	@Failure		409				{object}	errorBody
+//	@Failure		413				{object}	errorBody	"Body over 16 MB (other endpoints allow 1 MB)"
+//	@Failure		429				{object}	errorBody	"Backpressure: too many notifications waiting to be sent"
+//	@Header			429				{integer}	Retry-After	"Seconds to wait before retrying"
 //	@Router			/notifications/batch [post]
 func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	var req createBatchRequest
@@ -349,6 +355,7 @@ func pathID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 //	@Success		201		{object}	templateResponse
 //	@Failure		400		{object}	errorBody
 //	@Failure		409		{object}	errorBody	"Name already taken"
+//	@Failure		413		{object}	errorBody	"Body over 1 MB"
 //	@Router			/templates [post]
 func (h *Handler) createTemplate(w http.ResponseWriter, r *http.Request) {
 	var req createTemplateRequest

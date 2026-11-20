@@ -364,6 +364,18 @@ paths:
           description: Key reused with a different request
           schema:
             $ref: '#/definitions/httpapi.errorBody'
+        "413":
+          description: Body over 1 MB (the batch endpoint allows 16 MB)
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "429":
+          description: 'Backpressure: too many notifications waiting to be sent'
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              type: integer
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
       summary: Create a notification
       tags:
       - notifications
@@ -484,6 +496,18 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/httpapi.errorBody'
+        "413":
+          description: Body over 16 MB (other endpoints allow 1 MB)
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "429":
+          description: 'Backpressure: too many notifications waiting to be sent'
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              type: integer
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
       summary: Create up to 1000 notifications at once
       tags:
       - batches
@@ -524,6 +548,10 @@ paths:
             $ref: '#/definitions/httpapi.errorBody'
         "409":
           description: Name already taken
+          schema:
+            $ref: '#/definitions/httpapi.errorBody'
+        "413":
+          description: Body over 1 MB
           schema:
             $ref: '#/definitions/httpapi.errorBody'
       summary: Create a message template

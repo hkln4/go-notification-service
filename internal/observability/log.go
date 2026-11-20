@@ -1,5 +1,5 @@
-// Package observability holds logging, correlation IDs and (later) metrics
-// and tracing helpers shared by every binary.
+// Package observability holds the logging, correlation ID, PII masking,
+// metrics, health check and tracing helpers shared by every binary.
 package observability
 
 import (

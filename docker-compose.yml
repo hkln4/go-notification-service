@@ -62,7 +62,7 @@ services:
     image: migrate/migrate:v4.20.1
     volumes:
       - ./migrations:/migrations:ro
-    # Flags live in the entrypoint so `docker-compose run --rm migrate down 1`
+    # Flags live in the entrypoint so `docker compose run --rm migrate down 1`
     # only has to pass the subcommand.
     entrypoint:
       - migrate

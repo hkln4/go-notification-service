@@ -19,9 +19,11 @@ An event-driven notification service in Go that delivers SMS, email and push mes
 Requirements: Docker with Compose v2.
 
 ```sh
-docker-compose up -d --build          # or: make up
-docker-compose up -d --scale worker=3 # optional: three workers share the rate limit
+docker compose up -d --build          # or: make up
+docker compose up -d --scale worker=3 # optional: three workers share the rate limit
 ```
+
+The standalone `docker-compose` binary works the same way.
 
 Everything has defaults; no `.env` file is needed. To override something, copy `.env.example` to `.env`.
 
@@ -31,8 +33,8 @@ If PostgreSQL, RabbitMQ or Redis already runs on your machine and its port is ta
 |---|---|
 | API | http://localhost:8080/api/v1 |
 | Swagger UI | http://localhost:8080/swagger/index.html |
-| Metrics, health, readiness | http://localhost:8080/metrics, `/health`, `/ready` |
-| Prometheus (all services) | http://localhost:9091 |
+| API metrics (HTTP latency, created, queue depth, outbox backlog), health, readiness | http://localhost:8080/metrics, `/health`, `/ready` |
+| Delivery metrics (success/failure rates, provider latency, end-to-end latency), scraped from every service | Prometheus: http://localhost:9091 |
 | Jaeger (traces) | http://localhost:16686 |
 | RabbitMQ management | http://localhost:15672 (notification / notification) |
 | Mock provider stats | http://localhost:9090/stats |
@@ -390,7 +392,7 @@ Every API instance reads the `notification.events` fanout through its own exclus
 
 ## Observability
 
-**Metrics** (Prometheus format at `/metrics` on the API, and on `:9100` for the relay and each worker; the bundled Prometheus finds worker replicas through DNS):
+**Metrics** (Prometheus format at `/metrics` on the API, and on `:9100` for the relay and each worker; the bundled Prometheus finds worker replicas through DNS). Delivery metrics are recorded by the workers, whose `:9100` is not published to the host (several replicas would collide), so success/failure rates and latencies are read in Prometheus at http://localhost:9091; `:8080/metrics` has the API's own metrics and the queue depths:
 
 | Metric | Meaning |
 |---|---|

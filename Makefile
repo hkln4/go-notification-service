@@ -27,16 +27,16 @@ tidy:
 	go mod tidy
 
 up:
-	docker-compose up -d
+	docker compose up -d
 
 down:
-	docker-compose down
+	docker compose down
 
 migrate-up:
-	docker-compose run --rm migrate up
+	docker compose run --rm migrate up
 
 migrate-down:
-	docker-compose run --rm migrate down 1
+	docker compose run --rm migrate down 1
 
 # Regenerates docs/ from the handler annotations. CI checks it is up to date.
 SWAG_VERSION := v1.16.6

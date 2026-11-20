@@ -184,7 +184,7 @@ Each worker keeps a breaker per channel: after 10 consecutive transient failures
 
 ### Load protection
 
-- Request bodies are capped at 1 MB, the server has read and write timeouts, and the PostgreSQL pool is capped at 20 connections.
+- Request bodies are capped at 1 MB, and the batch endpoint at 16 MB: 1000 emails at the 10,000-character limit are about 10 MB of ASCII, more with multi-byte characters, and 16 MB fits that while still bounding memory per request. The server has read and write timeouts, and the PostgreSQL pool is capped at 20 connections.
 - **Backpressure.** When more than `BACKPRESSURE_LIMIT` outbox rows are due and unpublished, creates get `429` with `Retry-After: 5`. Reads and cancels keep working. The backlog is sampled once a second in the background, so the check costs nothing per request.
 
 ### Smaller choices

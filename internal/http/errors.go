@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -83,7 +84,8 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := dec.Decode(dst); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, codePayloadTooLarge, "request body exceeds 1 MB", nil)
+			writeError(w, http.StatusRequestEntityTooLarge, codePayloadTooLarge,
+				fmt.Sprintf("request body exceeds %d MB", tooLarge.Limit>>20), nil)
 			return false
 		}
 		writeError(w, http.StatusBadRequest, codeInvalidJSON, err.Error(), nil)

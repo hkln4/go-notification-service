@@ -382,3 +382,32 @@ func TestBatchMetricsUseResolvedChannels(t *testing.T) {
 	require.Contains(t, out, `notifications_created_total{channel="sms"} 1`)
 	require.NotContains(t, out, `notifications_created_total{channel=""}`)
 }
+
+func TestBodyLimits(t *testing.T) {
+	item := func(contentBytes int) string {
+		return `{"channel":"email","recipient":"a@b.co","content":"` + strings.Repeat("a", contentBytes) + `"}`
+	}
+	tests := []struct {
+		name    string
+		path    string
+		body    string
+		want    int
+		wantMsg string
+	}{
+		{"single create over 1 MB", "/api/v1/notifications", item(MaxBodyBytes), 413, "request body exceeds 1 MB"},
+		{"batch over 1 MB is fine", "/api/v1/notifications/batch", `{"notifications":[` + item(2<<20) + `]}`, 202, ""},
+		{"batch over 16 MB", "/api/v1/notifications/batch", `{"notifications":[` + item(MaxBatchBodyBytes) + `]}`, 413, "request body exceeds 16 MB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, newTestHandler(&fakeService{}), "POST", tt.path, tt.body)
+			require.Equal(t, tt.want, rec.Code)
+			if tt.wantMsg != "" {
+				var body errorBody
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+				require.Equal(t, codePayloadTooLarge, body.Error.Code)
+				require.Equal(t, tt.wantMsg, body.Error.Message)
+			}
+		})
+	}
+}

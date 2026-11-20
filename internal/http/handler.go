@@ -75,7 +75,7 @@ func New(svc NotificationService, log *slog.Logger, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.getNotification)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/cancel", h.cancelNotification)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/retry", h.retryNotification)
-	mux.Handle("POST /api/v1/notifications/batch", opts.Backpressure.wrap(http.HandlerFunc(h.createBatch)))
+	mux.Handle("POST "+batchPath, opts.Backpressure.wrap(http.HandlerFunc(h.createBatch)))
 	mux.HandleFunc("GET /api/v1/batches/{id}", h.getBatch)
 	mux.HandleFunc("POST /api/v1/templates", h.createTemplate)
 	mux.HandleFunc("GET /api/v1/templates", h.listTemplates)

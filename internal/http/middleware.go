@@ -16,9 +16,18 @@ import (
 	"github.com/hkln4/go-notification-service/internal/observability"
 )
 
-// MaxBodyBytes caps request bodies. A full 1000-item batch of 160-char SMS is
-// well under this.
-const MaxBodyBytes = 1 << 20
+const (
+	// MaxBodyBytes caps request bodies. One notification is at most about
+	// 10 KB (a 10,000-character email), so 1 MB leaves plenty of room.
+	MaxBodyBytes = 1 << 20
+	// MaxBatchBodyBytes caps the batch endpoint. 1000 emails at the
+	// 10,000-character limit are ~10 MB of ASCII, more with multi-byte
+	// characters; 16 MB fits that and still bounds memory per request.
+	MaxBatchBodyBytes = 16 << 20
+)
+
+// batchPath is shared by the route and bodyLimit so the two can't drift.
+const batchPath = "/api/v1/notifications/batch"
 
 // statusRecorder remembers the status code for the access log.
 type statusRecorder struct {
@@ -100,11 +109,21 @@ func recoverPanics(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
+// limitBody runs before routing, so it picks the limit from the method and
+// path itself; wrapping only the batch handler in a larger MaxBytesReader
+// would not help, the outer 1 MB reader would still cut the body.
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit(r))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func bodyLimit(r *http.Request) int64 {
+	if r.Method == http.MethodPost && r.URL.Path == batchPath {
+		return MaxBatchBodyBytes
+	}
+	return MaxBodyBytes
 }
 
 // Backpressure sheds load at the front door. When the relay can't keep up

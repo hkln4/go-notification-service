@@ -25,6 +25,8 @@ docker-compose up -d --scale worker=3 # optional: three workers share the rate l
 
 Everything has defaults; no `.env` file is needed. To override something, copy `.env.example` to `.env`.
 
+If PostgreSQL, RabbitMQ or Redis already runs on your machine and its port is taken, set `POSTGRES_PORT`, `RABBITMQ_PORT`, `RABBITMQ_UI_PORT` or `REDIS_PORT` in `.env`. Only the host side changes; the services reach each other inside the compose network. (Only if you also run a binary outside Docker, e.g. `make run`, point its `DATABASE_URL`, `AMQP_URL` or `REDIS_ADDR` at the new port.)
+
 | What | URL |
 |---|---|
 | API | http://localhost:8080/api/v1 |

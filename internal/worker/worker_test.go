@@ -187,7 +187,6 @@ func TestHandleDelivers(t *testing.T) {
 	o := h.store.outcomes[0]
 	require.Equal(t, domain.StatusSent, o.Status)
 	require.Equal(t, "pm-1", o.ProviderMessageID)
-	require.Equal(t, 1, o.Attempt.AttemptNo)
 	require.Equal(t, 202, *o.Attempt.HTTPStatus)
 	require.Equal(t, []domain.Status{domain.StatusProcessing, domain.StatusSent}, h.pub.events())
 }

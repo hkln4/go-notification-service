@@ -228,7 +228,7 @@ func (w *Worker) finish(ctx context.Context, d amqp.Delivery, n domain.Notificat
 	o := postgres.Outcome{
 		ID:      n.ID,
 		Lease:   lease,
-		Attempt: attemptRecord(n.Attempts, res, sendErr),
+		Attempt: attemptRecord(res, sendErr),
 	}
 
 	switch dec.Action {
@@ -299,8 +299,8 @@ func (w *Worker) deadLetter(d amqp.Delivery, n domain.Notification, why Action, 
 	})[0]
 }
 
-func attemptRecord(attemptNo int, res provider.Result, sendErr error) domain.Attempt {
-	a := domain.Attempt{AttemptNo: attemptNo, LatencyMS: int(res.Latency.Milliseconds())}
+func attemptRecord(res provider.Result, sendErr error) postgres.AttemptResult {
+	a := postgres.AttemptResult{LatencyMS: int(res.Latency.Milliseconds())}
 	if res.StatusCode != 0 {
 		code := res.StatusCode
 		a.HTTPStatus = &code

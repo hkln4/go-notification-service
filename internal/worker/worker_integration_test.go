@@ -292,6 +292,10 @@ func TestRequeueFromDLQIsDelivered(t *testing.T) {
 	attempts, err := e.store.ListAttempts(context.Background(), id)
 	require.NoError(t, err)
 	require.Len(t, attempts, 6, "history is kept: 5 failed + 1 sent")
+	for i, a := range attempts {
+		require.Equal(t, i+1, a.AttemptNo, "attemptNo keeps counting across the requeue")
+	}
+	require.Equal(t, 202, *attempts[5].HTTPStatus)
 
 	_, err = e.svc.Retry(context.Background(), id)
 	require.ErrorIs(t, err, domain.ErrInvalidState, "only failed notifications can be retried")

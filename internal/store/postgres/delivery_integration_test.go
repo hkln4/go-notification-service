@@ -82,7 +82,7 @@ func TestClaimIncrementsAttempts(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, want, got.Attempts)
 		applied, err := s.CompleteAttempt(ctx, postgres.Outcome{ID: n.ID, Lease: lease, Status: domain.StatusRetrying,
-			LastError: "500", Attempt: domain.Attempt{AttemptNo: want, HTTPStatus: ptr(500)}})
+			LastError: "500", Attempt: postgres.AttemptResult{HTTPStatus: ptr(500)}})
 		require.NoError(t, err)
 		require.True(t, applied)
 	}
@@ -90,6 +90,40 @@ func TestClaimIncrementsAttempts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, attempts, 3)
 	require.Equal(t, 500, *attempts[2].HTTPStatus)
+	require.Equal(t, []int{1, 2, 3}, attemptNos(attempts))
+}
+
+func attemptNos(as []domain.Attempt) []int {
+	nos := make([]int, len(as))
+	for i, a := range as {
+		nos[i] = a.AttemptNo
+	}
+	return nos
+}
+
+// Concurrent completions for one notification (a late worker reporting
+// while the current one does) must still get distinct, gapless numbers:
+// the row lock taken first serialises the max()+1 computation.
+func TestCompleteAttemptNumbersConcurrentCalls(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	n := newNotification(nil)
+	insert(t, s, n)
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() {
+			// Leases that don't match: only the attempt row is written.
+			_, err := s.CompleteAttempt(ctx, postgres.Outcome{ID: n.ID, Lease: uuid.New(), Status: domain.StatusFailed,
+				Attempt: postgres.AttemptResult{HTTPStatus: ptr(500)}})
+			assert.NoError(t, err) // not require: off the test goroutine
+		})
+	}
+	wg.Wait()
+
+	attempts, err := s.ListAttempts(ctx, n.ID)
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, attemptNos(attempts))
 }
 
 // Worker A's lease expires mid-call; worker B claims and sends. When A
@@ -111,12 +145,12 @@ func TestCompleteAttemptIsFencedByLease(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond, "B could not claim after A's lease expired")
 
 	applied, err := s.CompleteAttempt(ctx, postgres.Outcome{ID: n.ID, Lease: leaseB, Status: domain.StatusSent,
-		ProviderMessageID: "pm-b", Attempt: domain.Attempt{AttemptNo: 2, HTTPStatus: ptr(202)}})
+		ProviderMessageID: "pm-b", Attempt: postgres.AttemptResult{HTTPStatus: ptr(202)}})
 	require.NoError(t, err)
 	require.True(t, applied)
 
 	applied, err = s.CompleteAttempt(ctx, postgres.Outcome{ID: n.ID, Lease: leaseA, Status: domain.StatusFailed,
-		LastError: "late", Attempt: domain.Attempt{AttemptNo: 1, Error: ptr("timeout")}})
+		LastError: "late", Attempt: postgres.AttemptResult{Error: ptr("timeout")}})
 	require.NoError(t, err)
 	require.False(t, applied, "stale lease must not apply")
 
@@ -127,6 +161,10 @@ func TestCompleteAttemptIsFencedByLease(t *testing.T) {
 	attempts, err := s.ListAttempts(ctx, n.ID)
 	require.NoError(t, err)
 	require.Len(t, attempts, 2, "both calls happened and are recorded")
+	// Numbers follow the order the results were recorded, so A's late
+	// result comes second even though A called the provider first.
+	require.Equal(t, []int{1, 2}, attemptNos(attempts))
+	require.Equal(t, "timeout", *attempts[1].Error)
 }
 
 // Cancel and claim race on the same pending row, many times over. Each

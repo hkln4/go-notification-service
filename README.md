@@ -153,7 +153,7 @@ What I gave up:
 
 - **Jitter.** Fixed TTLs mean no jitter ([AWS: Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)). The thundering herd it prevents is absorbed by the rate limiter: however many retries come back at once, the provider never sees more than the channel's rate.
 - **429 is counted as an attempt.** If the provider throttles for long, messages can reach the DLQ. With our own limit well under its rate, this should be rare.
-- **Requeue from the DLQ.** `POST /api/v1/notifications/{id}/retry` gives a failed notification fresh attempts through a new outbox row. The copy left in `q.dlq` stays there as a record.
+- **Requeue from the DLQ.** `POST /api/v1/notifications/{id}/retry` gives a failed notification fresh attempts through a new outbox row. The copy left in `q.dlq` stays there as a record. `attempts` counts the current round and starts over on a requeue, while `deliveryAttempts[].attemptNo` numbers every call over the notification's whole history (five failures and a requeue: the next call is `attemptNo` 6, `attempts` 1).
 
 ### Rate limiting: GCRA in Redis
 

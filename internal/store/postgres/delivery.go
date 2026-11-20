@@ -64,7 +64,15 @@ type Outcome struct {
 	Status            domain.Status
 	ProviderMessageID string
 	LastError         string
-	Attempt           domain.Attempt
+	Attempt           AttemptResult
+}
+
+// AttemptResult is what one provider call returned. Its number is assigned
+// by CompleteAttempt.
+type AttemptResult struct {
+	HTTPStatus *int
+	Error      *string
+	LatencyMS  int
 }
 
 // CompleteAttempt records the attempt and moves the notification out of
@@ -75,13 +83,28 @@ type Outcome struct {
 // claimed the notification meanwhile, the update matches zero rows and
 // applied is false, so a slow worker can't overwrite a newer outcome. The
 // attempt row is written either way; the call did happen.
+//
+// attempt_no numbers every call over the notification's whole history. It
+// is not notifications.attempts, which counts the current round and starts
+// over when a failed notification is requeued: after five failures and a
+// requeue the next call is attempt_no 6, attempts 1.
 func (s *Store) CompleteAttempt(ctx context.Context, o Outcome) (applied bool, err error) {
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		// Lock the notification first so two completions for it (the rare
+		// case of a worker reporting after losing its lease) are numbered
+		// one after the other. The fenced UPDATE below would not do: for the
+		// loser it matches no row, so it never waits for the lock. Under
+		// READ COMMITTED the INSERT after the wait sees the other's row.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM notifications WHERE id = $1 FOR UPDATE`, o.ID); err != nil {
+			return fmt.Errorf("lock notification: %w", err)
+		}
 		a := o.Attempt
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO delivery_attempts (notification_id, attempt_no, http_status, error, latency_ms)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			o.ID, a.AttemptNo, a.HTTPStatus, a.Error, a.LatencyMS); err != nil {
+			 VALUES ($1,
+			         (SELECT COALESCE(max(attempt_no), 0) + 1 FROM delivery_attempts WHERE notification_id = $1),
+			         $2, $3, $4)`,
+			o.ID, a.HTTPStatus, a.Error, a.LatencyMS); err != nil {
 			return fmt.Errorf("insert attempt: %w", err)
 		}
 		tag, err := tx.Exec(ctx, `

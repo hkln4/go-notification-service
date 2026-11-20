@@ -239,16 +239,9 @@ func (h *Handler) createBatch(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusAccepted
 	if res.Replayed {
 		status = http.StatusOK
-	} else {
-		dup := map[int]bool{}
-		for _, i := range res.Duplicates {
-			dup[i] = true
-		}
-		for i, item := range items {
-			if !dup[i] {
-				h.metrics.Created(item.Input.Channel)
-			}
-		}
+	}
+	for _, ch := range res.CreatedChannels {
+		h.metrics.Created(string(ch))
 	}
 	w.Header().Set("Location", "/api/v1/batches/"+res.Batch.ID.String())
 	writeJSON(w, status, toCreateBatchResponse(res))

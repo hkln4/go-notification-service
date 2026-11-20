@@ -110,3 +110,26 @@ func TestBatchFromTemplateLoadsItOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Hi C", store.notifications[res.NotificationIDs[2]].Content)
 }
+
+// The created-notifications metric must use the channel the template
+// resolved, not the request's (possibly empty) one, and skip duplicates.
+func TestBatchCreatedChannels(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store)
+	ctx := context.Background()
+	tpl, err := svc.CreateTemplate(ctx, TemplateInput{Name: "promo", Channel: "push", Body: "Hi {{n}}"})
+	require.NoError(t, err)
+
+	fromTemplate := BatchItem{Input: domain.NotificationInput{Recipient: "tok", TemplateID: tpl.ID.String(),
+		Variables: map[string]string{"n": "A"}}}
+	sms := BatchItem{Input: domain.NotificationInput{Channel: "sms", Recipient: "+905551234567", Content: "x"}, IdempotencyKey: "k1"}
+
+	first, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{fromTemplate, sms}})
+	require.NoError(t, err)
+	require.Equal(t, []domain.Channel{domain.ChannelPush, domain.ChannelSMS}, first.CreatedChannels)
+
+	again, err := svc.CreateBatch(ctx, CreateBatchRequest{Items: []BatchItem{sms, fromTemplate}})
+	require.NoError(t, err)
+	require.Equal(t, []int{0}, again.Duplicates)
+	require.Equal(t, []domain.Channel{domain.ChannelPush}, again.CreatedChannels, "the duplicate is not counted again")
+}

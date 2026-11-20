@@ -29,7 +29,9 @@ type fakeService struct {
 	lastReq   service.CreateRequest
 	lastBatch service.CreateBatchRequest
 	lastList  service.ListQuery
-	panicOn   string
+	// batchChannels is what CreateBatch reports as created.
+	batchChannels []domain.Channel
+	panicOn       string
 }
 
 func (f *fakeService) Create(_ context.Context, req service.CreateRequest) (service.CreateResult, error) {
@@ -67,11 +69,15 @@ func (f *fakeService) CreateBatch(_ context.Context, req service.CreateBatchRequ
 	for i := range ids {
 		ids[i] = uuid.New()
 	}
-	return service.BatchResult{
+	res := service.BatchResult{
 		Batch:           domain.Batch{ID: knownID, TotalCount: len(ids)},
 		NotificationIDs: ids,
 		Replayed:        req.IdempotencyKey == "seen",
-	}, nil
+	}
+	if !res.Replayed {
+		res.CreatedChannels = f.batchChannels
+	}
+	return res, nil
 }
 
 func (f *fakeService) GetBatch(_ context.Context, id uuid.UUID) (service.BatchSummary, error) {
@@ -359,4 +365,20 @@ func TestInvalidStateMessageHidesSentinel(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, http.StatusConflict, rec.Code)
 	require.Equal(t, "cannot cancel a sent notification", body.Error.Message)
+}
+
+func TestBatchMetricsUseResolvedChannels(t *testing.T) {
+	m := observability.NewMetrics()
+	svc := &fakeService{batchChannels: []domain.Channel{domain.ChannelPush, domain.ChannelPush, domain.ChannelSMS}}
+	h := New(svc, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Metrics: m})
+	// Template items without a channel: the service resolves it.
+	body := `{"notifications":[{"recipient":"tok","templateId":"t"},{"recipient":"tok","templateId":"t"},{"recipient":"+905551234567","templateId":"u"}]}`
+
+	require.Equal(t, http.StatusAccepted, do(t, h, "POST", "/api/v1/notifications/batch", body).Code)
+	require.Equal(t, http.StatusOK, do(t, h, "POST", "/api/v1/notifications/batch", body, "Idempotency-Key", "seen").Code)
+
+	out := do(t, h, "GET", "/metrics", "").Body.String()
+	require.Contains(t, out, `notifications_created_total{channel="push"} 2`, "replay adds nothing")
+	require.Contains(t, out, `notifications_created_total{channel="sms"} 1`)
+	require.NotContains(t, out, `notifications_created_total{channel=""}`)
 }

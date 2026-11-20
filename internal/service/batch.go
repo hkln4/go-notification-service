@@ -36,6 +36,11 @@ type BatchResult struct {
 	// Replayed is set when the batch key matched an earlier identical batch;
 	// NotificationIDs then lists that batch's own notifications.
 	Replayed bool
+	// CreatedChannels has the resolved channel of every notification this
+	// call created, for metrics. A template item may leave its channel empty
+	// in the request; this has the template's. Duplicates and replays add
+	// nothing: they were counted when first created.
+	CreatedChannels []domain.Channel
 }
 
 // hashedItem is what the batch request hash covers: every validated item and
@@ -175,6 +180,9 @@ func (s *Service) createBatchOnce(ctx context.Context, req CreateBatchRequest, h
 		return BatchResult{}, err
 	}
 	res.Batch = batch
+	for _, n := range ns {
+		res.CreatedChannels = append(res.CreatedChannels, n.Channel)
+	}
 	return res, nil
 }
 

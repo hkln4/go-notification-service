@@ -127,7 +127,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).",
+                "description": "The example sends a notification right away. Optional extras:\n- **Send later:** add ` + "`" + `\"scheduledAt\": \"2030-01-01T09:00:00Z\"` + "`" + ` (RFC 3339, in the future).\n- **Use a template:** create one with ` + "`" + `POST /templates` + "`" + `, then send ` + "`" + `\"templateId\": \"\u003cid\u003e\", \"variables\": {\"name\": \"Ayşe\"}` + "`" + ` instead of ` + "`" + `content` + "`" + `; the channel comes from the template.\n- **Deduplicate retries:** send an ` + "`" + `Idempotency-Key` + "`" + ` header. The same key with the same body returns the stored notification with 200; with a different body, 409.",
                 "consumes": [
                     "application/json"
                 ],
@@ -203,7 +203,7 @@ const docTemplate = `{
         },
         "/notifications/batch": {
             "post": {
-                "description": "All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).",
+                "description": "Up to 1000 items, each with the same fields as ` + "`" + `POST /notifications` + "`" + `. All items are validated first; if any is invalid the whole batch is rejected and ` + "`" + `details` + "`" + ` lists each bad item by index. Valid batches are stored in one transaction. Optional extras:\n- **Per item:** ` + "`" + `scheduledAt` + "`" + `, and ` + "`" + `templateId` + "`" + ` + ` + "`" + `variables` + "`" + ` instead of ` + "`" + `content` + "`" + `, as in ` + "`" + `POST /notifications` + "`" + `.\n- **Deduplicate items:** an item may carry ` + "`" + `\"idempotencyKey\": \"order-1001\"` + "`" + `. One that already exists with the same content is skipped and listed in ` + "`" + `duplicates` + "`" + `; with different content the batch fails with 409.\n- **Deduplicate the batch:** send an ` + "`" + `Idempotency-Key` + "`" + ` header; repeating the same batch returns it with 200.",
                 "consumes": [
                     "application/json"
                 ],
@@ -520,18 +520,24 @@ const docTemplate = `{
         },
         "httpapi.batchItemRequest": {
             "type": "object",
+            "required": [
+                "channel",
+                "content",
+                "recipient"
+            ],
             "properties": {
                 "channel": {
                     "type": "string",
+                    "enum": [
+                        "sms",
+                        "email",
+                        "push"
+                    ],
                     "example": "sms"
                 },
                 "content": {
                     "type": "string",
                     "example": "Your order has shipped"
-                },
-                "idempotencyKey": {
-                    "type": "string",
-                    "example": "order-1001-item-1"
                 },
                 "priority": {
                     "type": "string",
@@ -545,25 +551,6 @@ const docTemplate = `{
                 "recipient": {
                     "type": "string",
                     "example": "+905551234567"
-                },
-                "scheduledAt": {
-                    "description": "Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI\npre-fills them, and a realistic value would look like part of a\nworking request. Sent unchanged they fail with a message that repeats\nthe marker.",
-                    "type": "string",
-                    "example": "REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z"
-                },
-                "templateId": {
-                    "description": "TemplateID renders content from a template; content must then be\nempty and channel may be omitted.",
-                    "type": "string",
-                    "example": "REMOVE_OR_SET a template id from POST /templates"
-                },
-                "variables": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    },
-                    "example": {
-                        "name": "REMOVE_OR_SET"
-                    }
                 }
             }
         },
@@ -624,9 +611,19 @@ const docTemplate = `{
         },
         "httpapi.createNotificationRequest": {
             "type": "object",
+            "required": [
+                "channel",
+                "content",
+                "recipient"
+            ],
             "properties": {
                 "channel": {
                     "type": "string",
+                    "enum": [
+                        "sms",
+                        "email",
+                        "push"
+                    ],
                     "example": "sms"
                 },
                 "content": {
@@ -645,25 +642,6 @@ const docTemplate = `{
                 "recipient": {
                     "type": "string",
                     "example": "+905551234567"
-                },
-                "scheduledAt": {
-                    "description": "Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI\npre-fills them, and a realistic value would look like part of a\nworking request. Sent unchanged they fail with a message that repeats\nthe marker.",
-                    "type": "string",
-                    "example": "REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z"
-                },
-                "templateId": {
-                    "description": "TemplateID renders content from a template; content must then be\nempty and channel may be omitted.",
-                    "type": "string",
-                    "example": "REMOVE_OR_SET a template id from POST /templates"
-                },
-                "variables": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    },
-                    "example": {
-                        "name": "REMOVE_OR_SET"
-                    }
                 }
             }
         },

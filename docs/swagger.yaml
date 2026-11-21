@@ -16,13 +16,14 @@ definitions:
   httpapi.batchItemRequest:
     properties:
       channel:
+        enum:
+        - sms
+        - email
+        - push
         example: sms
         type: string
       content:
         example: Your order has shipped
-        type: string
-      idempotencyKey:
-        example: order-1001-item-1
         type: string
       priority:
         enum:
@@ -34,26 +35,10 @@ definitions:
       recipient:
         example: "+905551234567"
         type: string
-      scheduledAt:
-        description: |-
-          Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI
-          pre-fills them, and a realistic value would look like part of a
-          working request. Sent unchanged they fail with a message that repeats
-          the marker.
-        example: REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z
-        type: string
-      templateId:
-        description: |-
-          TemplateID renders content from a template; content must then be
-          empty and channel may be omitted.
-        example: REMOVE_OR_SET a template id from POST /templates
-        type: string
-      variables:
-        additionalProperties:
-          type: string
-        example:
-          name: REMOVE_OR_SET
-        type: object
+    required:
+    - channel
+    - content
+    - recipient
     type: object
   httpapi.batchResponse:
     properties:
@@ -94,6 +79,10 @@ definitions:
   httpapi.createNotificationRequest:
     properties:
       channel:
+        enum:
+        - sms
+        - email
+        - push
         example: sms
         type: string
       content:
@@ -109,26 +98,10 @@ definitions:
       recipient:
         example: "+905551234567"
         type: string
-      scheduledAt:
-        description: |-
-          Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI
-          pre-fills them, and a realistic value would look like part of a
-          working request. Sent unchanged they fail with a message that repeats
-          the marker.
-        example: REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z
-        type: string
-      templateId:
-        description: |-
-          TemplateID renders content from a template; content must then be
-          empty and channel may be omitted.
-        example: REMOVE_OR_SET a template id from POST /templates
-        type: string
-      variables:
-        additionalProperties:
-          type: string
-        example:
-          name: REMOVE_OR_SET
-        type: object
+    required:
+    - channel
+    - content
+    - recipient
     type: object
   httpapi.createTemplateRequest:
     properties:
@@ -350,11 +323,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: 'With an Idempotency-Key, repeating the same request returns the
-        stored notification with 200; reusing the key with a different body returns
-        409. Swagger UI pre-fills every optional field: to send plain content right
-        away, delete scheduledAt, templateId and variables from the example (templateId
-        and variables replace content).'
+      description: |-
+        The example sends a notification right away. Optional extras:
+        - **Send later:** add `"scheduledAt": "2030-01-01T09:00:00Z"` (RFC 3339, in the future).
+        - **Use a template:** create one with `POST /templates`, then send `"templateId": "<id>", "variables": {"name": "Ayşe"}` instead of `content`; the channel comes from the template.
+        - **Deduplicate retries:** send an `Idempotency-Key` header. The same key with the same body returns the stored notification with 200; with a different body, 409.
       parameters:
       - description: Deduplicates retries of this request
         in: header
@@ -482,14 +455,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: 'All items are validated first; if any is invalid the whole batch
-        is rejected and details lists each bad item by index. Valid batches are stored
-        in one transaction. Items may carry their own idempotencyKey: an item that
-        already exists with the same request is skipped and listed in duplicates;
-        one that exists with a different request fails the batch with 409. Swagger
-        UI pre-fills every optional field: to send plain content right away, delete
-        scheduledAt, templateId and variables from the example (templateId and variables
-        replace content).'
+      description: |-
+        Up to 1000 items, each with the same fields as `POST /notifications`. All items are validated first; if any is invalid the whole batch is rejected and `details` lists each bad item by index. Valid batches are stored in one transaction. Optional extras:
+        - **Per item:** `scheduledAt`, and `templateId` + `variables` instead of `content`, as in `POST /notifications`.
+        - **Deduplicate items:** an item may carry `"idempotencyKey": "order-1001"`. One that already exists with the same content is skipped and listed in `duplicates`; with different content the batch fails with 409.
+        - **Deduplicate the batch:** send an `Idempotency-Key` header; repeating the same batch returns it with 200.
       parameters:
       - description: Deduplicates retries of the whole batch
         in: header

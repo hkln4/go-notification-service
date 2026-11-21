@@ -99,7 +99,10 @@ const IdempotencyKeyHeader = "Idempotency-Key"
 // createNotification godoc
 //
 //	@Summary		Create a notification
-//	@Description	With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).
+//	@Description	The example sends a notification right away. Optional extras:
+//	@Description	- **Send later:** add `"scheduledAt": "2030-01-01T09:00:00Z"` (RFC 3339, in the future).
+//	@Description	- **Use a template:** create one with `POST /templates`, then send `"templateId": "<id>", "variables": {"name": "Ayşe"}` instead of `content`; the channel comes from the template.
+//	@Description	- **Deduplicate retries:** send an `Idempotency-Key` header. The same key with the same body returns the stored notification with 200; with a different body, 409.
 //	@Tags			notifications
 //	@Accept			json
 //	@Produce		json
@@ -210,7 +213,10 @@ func (h *Handler) retryNotification(w http.ResponseWriter, r *http.Request) {
 // createBatch godoc
 //
 //	@Summary		Create up to 1000 notifications at once
-//	@Description	All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).
+//	@Description	Up to 1000 items, each with the same fields as `POST /notifications`. All items are validated first; if any is invalid the whole batch is rejected and `details` lists each bad item by index. Valid batches are stored in one transaction. Optional extras:
+//	@Description	- **Per item:** `scheduledAt`, and `templateId` + `variables` instead of `content`, as in `POST /notifications`.
+//	@Description	- **Deduplicate items:** an item may carry `"idempotencyKey": "order-1001"`. One that already exists with the same content is skipped and listed in `duplicates`; with different content the batch fails with 409.
+//	@Description	- **Deduplicate the batch:** send an `Idempotency-Key` header; repeating the same batch returns it with 200.
 //	@Tags			batches
 //	@Accept			json
 //	@Produce		json

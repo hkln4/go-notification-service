@@ -44,11 +44,7 @@ curl -s -X POST localhost:8080/api/v1/notifications \
   -d '{"channel":"sms","recipient":"+905551234567","content":"Hello","priority":"high"}'
 ```
 
-In Swagger UI, "Try it out" pre-fills every optional field, including `scheduledAt`, `templateId` and `variables`, which don't go together with `content`. To send a plain notification, delete those fields from the example, or replace the body with:
-
-```json
-{ "channel": "sms", "recipient": "+905551234567", "content": "Hello", "priority": "high" }
-```
+In Swagger UI, the create examples send a plain notification as they are; each endpoint's description shows the optional extras (scheduling, templates, idempotency keys).
 
 ### Using webhook.site as the provider
 

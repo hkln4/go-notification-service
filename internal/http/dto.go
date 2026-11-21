@@ -8,20 +8,23 @@ import (
 	"github.com/hkln4/go-notification-service/internal/template"
 )
 
+// The validate tags only mark fields as required in the OpenAPI spec;
+// validation itself is domain.NotificationInput.Validate.
 type createNotificationRequest struct {
-	Channel   string `json:"channel" example:"sms"`
-	Recipient string `json:"recipient" example:"+905551234567"`
-	Content   string `json:"content" example:"Your order has shipped"`
+	Channel   string `json:"channel" validate:"required" enums:"sms,email,push" example:"sms"`
+	Recipient string `json:"recipient" validate:"required" example:"+905551234567"`
+	Content   string `json:"content" validate:"required" example:"Your order has shipped"`
 	Priority  string `json:"priority,omitempty" enums:"high,normal,low" example:"high"`
-	// Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI
-	// pre-fills them, and a realistic value would look like part of a
-	// working request. Sent unchanged they fail with a message that repeats
-	// the marker.
-	ScheduledAt *time.Time `json:"scheduledAt,omitempty" example:"REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z"`
+
+	// The optional extras are left out of the spec (swaggerignore) and
+	// described on the endpoints instead. Swagger UI pre-fills every field of
+	// the schema into its example, and these don't go together with a plain
+	// send, so with them in the schema "Try it out" would fail by default.
+	ScheduledAt *time.Time `json:"scheduledAt,omitempty" swaggerignore:"true"`
 	// TemplateID renders content from a template; content must then be
 	// empty and channel may be omitted.
-	TemplateID string            `json:"templateId,omitempty" example:"REMOVE_OR_SET a template id from POST /templates"`
-	Variables  map[string]string `json:"variables,omitempty" example:"name:REMOVE_OR_SET"`
+	TemplateID string            `json:"templateId,omitempty" swaggerignore:"true"`
+	Variables  map[string]string `json:"variables,omitempty" swaggerignore:"true"`
 }
 
 func (r createNotificationRequest) input() domain.NotificationInput {
@@ -119,7 +122,9 @@ type createBatchRequest struct {
 
 type batchItemRequest struct {
 	createNotificationRequest
-	IdempotencyKey string `json:"idempotencyKey,omitempty" example:"order-1001-item-1"`
+	// Left out of the spec like the extras above: with an example key, running
+	// the example twice would skip the item as a duplicate and look broken.
+	IdempotencyKey string `json:"idempotencyKey,omitempty" swaggerignore:"true"`
 }
 
 type createBatchResponse struct {

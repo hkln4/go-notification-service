@@ -39,9 +39,11 @@ migrate-down:
 	docker compose run --rm migrate down 1
 
 # Regenerates docs/ from the handler annotations. CI checks it is up to date.
+# docs.go renders the spec with text/template; [[ ]] delimiters keep the
+# {{variable}} placeholders in the template docs from being parsed as actions.
 SWAG_VERSION := v1.16.6
 swagger:
-	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init -g cmd/api/main.go -o docs --parseInternal --outputTypes go,json,yaml
+	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init -g cmd/api/main.go -o docs --parseInternal --outputTypes go,json,yaml --templateDelims '[[,]]'
 	gofmt -w docs
 
 # Needs the stack: docker compose up -d --scale worker=3

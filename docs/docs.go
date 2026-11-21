@@ -4,16 +4,16 @@ package docs
 import "github.com/swaggo/swag"
 
 const docTemplate = `{
-    "schemes": {{ marshal .Schemes }},
+    "schemes": [[ marshal .Schemes ]],
     "swagger": "2.0",
     "info": {
-        "description": "{{escape .Description}}",
-        "title": "{{.Title}}",
+        "description": "[[escape .Description]]",
+        "title": "[[.Title]]",
         "contact": {},
-        "version": "{{.Version}}"
+        "version": "[[.Version]]"
     },
-    "host": "{{.Host}}",
-    "basePath": "{{.BasePath}}",
+    "host": "[[.Host]]",
+    "basePath": "[[.BasePath]]",
     "paths": {
         "/batches/{id}": {
             "get": {
@@ -866,8 +866,8 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "Event-driven notification service for SMS, email and push. Creating a notification stores it with an outbox row and returns 202; delivery happens asynchronously with retries, a per-channel rate limit of 100/s and a dead letter queue.\nEvery response carries X-Correlation-ID (echoed from the request or generated). Errors have the shape {\"error\":{\"code\",\"message\",\"details\"}}.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
-	LeftDelim:        "{{",
-	RightDelim:       "}}",
+	LeftDelim:        "[[",
+	RightDelim:       "]]",
 }
 
 func init() {

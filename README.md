@@ -169,7 +169,7 @@ Every worker books a send slot per channel in Redis using GCRA (the generic cell
 
 If Redis is unreachable the limiter **fails closed**: nothing is sent, and messages circle the 5 s retry queue without using attempts. The alternative, sending without a limit, would break the one rule the provider gave us.
 
-The default is **95/s, not 100**. The limiter spaces 100/s slots exactly, but send times drift by a few milliseconds on the way out (scheduling, connection reuse). Under load the provider measured up to 104 requests in a second at a 100/s limit, and 98 at 95/s. The 5% headroom keeps the provider's own view under 100. The guarantee is exact at the limiter (tested with three workers and 30 concurrent senders); at the provider it is a measurement, see [Load test](#load-test).
+The default is **95/s, not 100**. The limiter spaces 100/s slots exactly, but send times drift by a few milliseconds on the way out (scheduling, connection reuse). Under load the provider measured up to 104 requests in a second at a 100/s limit, and 96–98 at 95/s. In warm runs the 5% headroom kept the provider's own view under 100. The guarantee is exact at the limiter (tested with three workers and 30 concurrent senders); at the provider it is a measurement, see [Load test](#load-test).
 
 ### Priority
 
@@ -217,7 +217,7 @@ Setup: Docker Desktop on one machine (8 vCPU, 8 GB), every service plus k6 on th
 | Provider: most requests in any sliding second, per channel | 98 |
 | Provider: duplicate deliveries | 0 |
 
-The API answers in about a millisecond because it only writes to PostgreSQL; the work queues up in RabbitMQ, and priority decides who waits. The provider-side rate is a measurement, not a guarantee: one run made right after restarting every container showed 108 in one second, which shows how much a cold, overloaded single machine can bunch up arrivals. The limiter's own spacing is exact and covered by the integration test.
+The API answers in about a millisecond because it only writes to PostgreSQL; the work queues up in RabbitMQ, and priority decides who waits. The provider-side rate is a measurement, not a guarantee: one run made right after restarting every container showed 108 in one second, which shows how much a cold, overloaded single machine can bunch up arrivals. A wider margin (e.g. 90/s) would absorb more of this; beyond that, a real provider enforces its own limit with 429, which the worker honours via Retry-After. The limiter's own spacing is exact and covered by the integration test.
 
 ## API examples
 

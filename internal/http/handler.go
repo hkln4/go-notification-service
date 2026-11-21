@@ -99,7 +99,7 @@ const IdempotencyKeyHeader = "Idempotency-Key"
 // createNotification godoc
 //
 //	@Summary		Create a notification
-//	@Description	With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409.
+//	@Description	With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).
 //	@Tags			notifications
 //	@Accept			json
 //	@Produce		json
@@ -210,7 +210,7 @@ func (h *Handler) retryNotification(w http.ResponseWriter, r *http.Request) {
 // createBatch godoc
 //
 //	@Summary		Create up to 1000 notifications at once
-//	@Description	All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409.
+//	@Description	All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).
 //	@Tags			batches
 //	@Accept			json
 //	@Produce		json

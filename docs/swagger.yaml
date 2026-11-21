@@ -22,6 +22,7 @@ definitions:
         example: Your order has shipped
         type: string
       idempotencyKey:
+        example: order-1001-item-1
         type: string
       priority:
         enum:
@@ -34,15 +35,24 @@ definitions:
         example: "+905551234567"
         type: string
       scheduledAt:
+        description: |-
+          Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI
+          pre-fills them, and a realistic value would look like part of a
+          working request. Sent unchanged they fail with a message that repeats
+          the marker.
+        example: REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z
         type: string
       templateId:
         description: |-
           TemplateID renders content from a template; content must then be
           empty and channel may be omitted.
+        example: REMOVE_OR_SET a template id from POST /templates
         type: string
       variables:
         additionalProperties:
           type: string
+        example:
+          name: REMOVE_OR_SET
         type: object
     type: object
   httpapi.batchResponse:
@@ -100,15 +110,24 @@ definitions:
         example: "+905551234567"
         type: string
       scheduledAt:
+        description: |-
+          Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI
+          pre-fills them, and a realistic value would look like part of a
+          working request. Sent unchanged they fail with a message that repeats
+          the marker.
+        example: REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z
         type: string
       templateId:
         description: |-
           TemplateID renders content from a template; content must then be
           empty and channel may be omitted.
+        example: REMOVE_OR_SET a template id from POST /templates
         type: string
       variables:
         additionalProperties:
           type: string
+        example:
+          name: REMOVE_OR_SET
         type: object
     type: object
   httpapi.createTemplateRequest:
@@ -331,9 +350,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: With an Idempotency-Key, repeating the same request returns the
+      description: 'With an Idempotency-Key, repeating the same request returns the
         stored notification with 200; reusing the key with a different body returns
-        409.
+        409. Swagger UI pre-fills every optional field: to send plain content right
+        away, delete scheduledAt, templateId and variables from the example (templateId
+        and variables replace content).'
       parameters:
       - description: Deduplicates retries of this request
         in: header
@@ -465,7 +486,10 @@ paths:
         is rejected and details lists each bad item by index. Valid batches are stored
         in one transaction. Items may carry their own idempotencyKey: an item that
         already exists with the same request is skipped and listed in duplicates;
-        one that exists with a different request fails the batch with 409.'
+        one that exists with a different request fails the batch with 409. Swagger
+        UI pre-fills every optional field: to send plain content right away, delete
+        scheduledAt, templateId and variables from the example (templateId and variables
+        replace content).'
       parameters:
       - description: Deduplicates retries of the whole batch
         in: header

@@ -9,15 +9,19 @@ import (
 )
 
 type createNotificationRequest struct {
-	Channel     string     `json:"channel" example:"sms"`
-	Recipient   string     `json:"recipient" example:"+905551234567"`
-	Content     string     `json:"content" example:"Your order has shipped"`
-	Priority    string     `json:"priority,omitempty" enums:"high,normal,low" example:"high"`
-	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
+	Channel   string `json:"channel" example:"sms"`
+	Recipient string `json:"recipient" example:"+905551234567"`
+	Content   string `json:"content" example:"Your order has shipped"`
+	Priority  string `json:"priority,omitempty" enums:"high,normal,low" example:"high"`
+	// Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI
+	// pre-fills them, and a realistic value would look like part of a
+	// working request. Sent unchanged they fail with a message that repeats
+	// the marker.
+	ScheduledAt *time.Time `json:"scheduledAt,omitempty" example:"REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z"`
 	// TemplateID renders content from a template; content must then be
 	// empty and channel may be omitted.
-	TemplateID string            `json:"templateId,omitempty"`
-	Variables  map[string]string `json:"variables,omitempty"`
+	TemplateID string            `json:"templateId,omitempty" example:"REMOVE_OR_SET a template id from POST /templates"`
+	Variables  map[string]string `json:"variables,omitempty" example:"name:REMOVE_OR_SET"`
 }
 
 func (r createNotificationRequest) input() domain.NotificationInput {
@@ -115,7 +119,7 @@ type createBatchRequest struct {
 
 type batchItemRequest struct {
 	createNotificationRequest
-	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty" example:"order-1001-item-1"`
 }
 
 type createBatchResponse struct {

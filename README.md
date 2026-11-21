@@ -44,6 +44,12 @@ curl -s -X POST localhost:8080/api/v1/notifications \
   -d '{"channel":"sms","recipient":"+905551234567","content":"Hello","priority":"high"}'
 ```
 
+In Swagger UI, "Try it out" pre-fills every optional field, including `scheduledAt`, `templateId` and `variables`, which don't go together with `content`. To send a plain notification, delete those fields from the example, or replace the body with:
+
+```json
+{ "channel": "sms", "recipient": "+905551234567", "content": "Hello", "priority": "high" }
+```
+
 ### Using webhook.site as the provider
 
 By default the worker sends to a bundled mock provider (`cmd/mockprovider`) with configurable latency and failure rate, because webhook.site's free URLs stop answering after about 100 requests. To use webhook.site, create a URL there, set its response to status `202` with a body such as `{"messageId":"8f0c6f5e-3a2b-4c1d-9e7f-1a2b3c4d5e6f","status":"accepted","timestamp":"2026-11-18T12:00:00Z"}`, and set it in `.env`:
@@ -51,6 +57,8 @@ By default the worker sends to a bundled mock provider (`cmd/mockprovider`) with
 ```sh
 PROVIDER_URL=https://webhook.site/<your-uuid>
 ```
+
+If the stack is already running, run `docker compose up -d` again so the worker picks up the new URL.
 
 ## Running tests
 
@@ -473,9 +481,9 @@ Dependencies point inward: handlers depend on the service, the service on interf
 
 - **Fairness between tenants.** One large sender can fill a channel's 100/s. Per-tenant limits or weighted fair queuing would stop that.
 - **Jitter, at least for 429s.** It would spread retries out even without the shared limiter.
-- **Quorum queues** for broker high availability. Recent RabbitMQ versions give them priorities (32 levels as of 4.3) with priority-aware expiration, which also removes the head-of-line TTL issue of classic queues.
+- **Quorum queues** for broker high availability. Recent RabbitMQ versions give them priorities (32 levels as of 4.3).
 - **`LISTEN/NOTIFY`** to wake the relay instead of polling, and partitioning the outbox if it grows large.
 - **Authentication and authorisation**, and per-client rate limits on the API itself.
 - **A shared circuit breaker** in Redis, so all workers react to an outage at the same moment.
 - **Retention.** Archive or delete old notifications and attempts, and purge DLQ messages that have been requeued.
-- **Adding a channel** means one more value in `domain.Channels` and its validation rules; queues, retry queues, limits and metrics are all derived from that list.
+- **Adding a channel** means one more value in `domain.Channels`, its validation rules and a migration that adds it to the `channel` enum; queues, retry queues, limits and metrics are all derived from that list.

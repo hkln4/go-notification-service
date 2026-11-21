@@ -127,7 +127,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409.",
+                "description": "With an Idempotency-Key, repeating the same request returns the stored notification with 200; reusing the key with a different body returns 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).",
                 "consumes": [
                     "application/json"
                 ],
@@ -203,7 +203,7 @@ const docTemplate = `{
         },
         "/notifications/batch": {
             "post": {
-                "description": "All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409.",
+                "description": "All items are validated first; if any is invalid the whole batch is rejected and details lists each bad item by index. Valid batches are stored in one transaction. Items may carry their own idempotencyKey: an item that already exists with the same request is skipped and listed in duplicates; one that exists with a different request fails the batch with 409. Swagger UI pre-fills every optional field: to send plain content right away, delete scheduledAt, templateId and variables from the example (templateId and variables replace content).",
                 "consumes": [
                     "application/json"
                 ],
@@ -530,7 +530,8 @@ const docTemplate = `{
                     "example": "Your order has shipped"
                 },
                 "idempotencyKey": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "order-1001-item-1"
                 },
                 "priority": {
                     "type": "string",
@@ -546,16 +547,22 @@ const docTemplate = `{
                     "example": "+905551234567"
                 },
                 "scheduledAt": {
-                    "type": "string"
+                    "description": "Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI\npre-fills them, and a realistic value would look like part of a\nworking request. Sent unchanged they fail with a message that repeats\nthe marker.",
+                    "type": "string",
+                    "example": "REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z"
                 },
                 "templateId": {
                     "description": "TemplateID renders content from a template; content must then be\nempty and channel may be omitted.",
-                    "type": "string"
+                    "type": "string",
+                    "example": "REMOVE_OR_SET a template id from POST /templates"
                 },
                 "variables": {
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
+                    },
+                    "example": {
+                        "name": "REMOVE_OR_SET"
                     }
                 }
             }
@@ -640,16 +647,22 @@ const docTemplate = `{
                     "example": "+905551234567"
                 },
                 "scheduledAt": {
-                    "type": "string"
+                    "description": "Examples of the optional fields are marked REMOVE_OR_SET: Swagger UI\npre-fills them, and a realistic value would look like part of a\nworking request. Sent unchanged they fail with a message that repeats\nthe marker.",
+                    "type": "string",
+                    "example": "REMOVE_OR_SET e.g. 2030-01-01T09:00:00Z"
                 },
                 "templateId": {
                     "description": "TemplateID renders content from a template; content must then be\nempty and channel may be omitted.",
-                    "type": "string"
+                    "type": "string",
+                    "example": "REMOVE_OR_SET a template id from POST /templates"
                 },
                 "variables": {
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
+                    },
+                    "example": {
+                        "name": "REMOVE_OR_SET"
                     }
                 }
             }

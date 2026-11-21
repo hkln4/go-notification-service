@@ -15,6 +15,9 @@ const (
 	ActionPermanentFail
 )
 
+// Actions lists every action, e.g. to create their metric series upfront.
+var Actions = []Action{ActionSent, ActionRetry, ActionDeadLetter, ActionPermanentFail}
+
 func (a Action) String() string {
 	switch a {
 	case ActionSent:

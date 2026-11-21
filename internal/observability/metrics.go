@@ -75,6 +75,37 @@ func NewMetrics() *Metrics {
 	return m
 }
 
+// InitAPI creates the API's per-channel series at zero. A labelled series
+// otherwise only appears on its first event: until then a query returns
+// nothing instead of 0, and rate() misses that first increment.
+func (m *Metrics) InitAPI(channels []string) {
+	if m == nil {
+		return
+	}
+	for _, ch := range channels {
+		m.created.WithLabelValues(ch)
+	}
+}
+
+// InitWorker does the same for the worker's series: every channel and
+// delivery result, and, if the circuit breaker is enabled, each channel's
+// breaker state as closed.
+func (m *Metrics) InitWorker(channels, results []string, breaker bool) {
+	if m == nil {
+		return
+	}
+	for _, ch := range channels {
+		for _, res := range results {
+			m.delivered.WithLabelValues(ch, res)
+		}
+		m.deliveryDuration.WithLabelValues(ch)
+		m.endToEnd.WithLabelValues(ch)
+		if breaker {
+			m.breakerState.WithLabelValues(ch).Set(0)
+		}
+	}
+}
+
 func (m *Metrics) Handler() http.Handler {
 	if m == nil {
 		return http.NotFoundHandler()

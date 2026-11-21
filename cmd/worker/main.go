@@ -18,6 +18,7 @@ import (
 	"github.com/hkln4/go-notification-service/internal/breaker"
 	"github.com/hkln4/go-notification-service/internal/broker"
 	"github.com/hkln4/go-notification-service/internal/config"
+	"github.com/hkln4/go-notification-service/internal/domain"
 	"github.com/hkln4/go-notification-service/internal/observability"
 	"github.com/hkln4/go-notification-service/internal/provider"
 	"github.com/hkln4/go-notification-service/internal/ratelimit"
@@ -66,6 +67,15 @@ func run() error {
 	defer mq.Close()
 
 	metrics := observability.NewMetrics()
+	channels := make([]string, len(domain.Channels))
+	for i, ch := range domain.Channels {
+		channels[i] = string(ch)
+	}
+	results := make([]string, len(worker.Actions))
+	for i, a := range worker.Actions {
+		results[i] = a.String()
+	}
+	metrics.InitWorker(channels, results, cfg.BreakerThreshold > 0)
 	ops := observability.OpsServer(cfg.MetricsAddr, metrics, observability.ReadyHandler(2*time.Second,
 		observability.Check{Name: "postgres", Ping: pool.Ping},
 		observability.Check{Name: "rabbitmq", Ping: func(context.Context) error {

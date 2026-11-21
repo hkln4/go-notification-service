@@ -44,7 +44,7 @@ curl -s -X POST localhost:8080/api/v1/notifications \
   -d '{"channel":"sms","recipient":"+905551234567","content":"Hello","priority":"high"}'
 ```
 
-In Swagger UI, the create examples send a plain notification as they are; each endpoint's description shows the optional extras (scheduling, templates, idempotency keys).
+In Swagger UI, the create examples send a plain notification as they are; each endpoint's description shows the optional extras (scheduling, templates, idempotency keys). They are left out of the schema itself because Swagger UI copies every schema field into its example, and these extras don't go together with a plain send.
 
 ### Using webhook.site as the provider
 

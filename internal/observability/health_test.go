@@ -66,3 +66,47 @@ func TestMetricsExposition(t *testing.T) {
 	var nilMetrics *Metrics
 	nilMetrics.Created("sms") // must not panic
 }
+
+// Known label combinations exist from the start with 0, so queries never
+// come back empty just because nothing has happened yet.
+func TestInitCreatesZeroSeries(t *testing.T) {
+	channels := []string{"sms", "email", "push"}
+	tests := []struct {
+		name    string
+		init    func(*Metrics)
+		want    []string
+		notWant []string
+	}{
+		{"api", func(m *Metrics) { m.InitAPI(channels) },
+			[]string{`notifications_created_total{channel="push"} 0`}, nil},
+		{"worker with breaker", func(m *Metrics) { m.InitWorker(channels, []string{"sent", "dead_letter"}, true) },
+			[]string{
+				`notifications_delivered_total{channel="email",result="dead_letter"} 0`,
+				`notifications_delivered_total{channel="sms",result="sent"} 0`,
+				`notification_delivery_duration_seconds_count{channel="push"} 0`,
+				`notification_end_to_end_seconds_count{channel="sms"} 0`,
+				`circuit_breaker_state{channel="email"} 0`,
+			}, nil},
+		{"worker without breaker", func(m *Metrics) { m.InitWorker(channels, []string{"sent"}, false) },
+			[]string{`notifications_delivered_total{channel="sms",result="sent"} 0`},
+			[]string{"circuit_breaker_state{"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewMetrics()
+			tt.init(m)
+			rec := httptest.NewRecorder()
+			m.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+			for _, w := range tt.want {
+				require.Contains(t, rec.Body.String(), w)
+			}
+			for _, w := range tt.notWant {
+				require.NotContains(t, rec.Body.String(), w)
+			}
+		})
+	}
+
+	var nilMetrics *Metrics
+	nilMetrics.InitAPI(channels) // must not panic
+	nilMetrics.InitWorker(channels, nil, true)
+}

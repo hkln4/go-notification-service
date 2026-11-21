@@ -75,6 +75,7 @@ func run() error {
 	defer func() { _ = rdb.Close() }()
 
 	metrics := observability.NewMetrics()
+	metrics.InitAPI(channelNames())
 	var backlog atomic.Int64
 	go sample(ctx, store, mq, metrics, &backlog, log)
 
@@ -169,4 +170,12 @@ func sample(ctx context.Context, store *postgres.Store, mq *broker.Client, m *ob
 			}
 		}
 	}
+}
+
+func channelNames() []string {
+	names := make([]string, len(domain.Channels))
+	for i, ch := range domain.Channels {
+		names[i] = string(ch)
+	}
+	return names
 }
